@@ -1,20 +1,22 @@
 from typing import Dict, Any
 import json
 
-from grok import Grok
+from openai import OpenAI
 from config import GROK_API_KEY, LLM_MODEL_NAME
 from prompts.system_prompt import SYSTEM_PROMPT
+
+XAI_BASE_URL = "https://api.x.ai/v1"
 
 
 class HealthForgeLLMClient:
     """
-    Thin wrapper around Grok's LLM client using Llama 3.3 Versatile.
+    Thin wrapper around xAI's Grok API (OpenAI-compatible) using Llama 3.3 Versatile.
     """
 
     def __init__(self) -> None:
         if not GROK_API_KEY:
             raise ValueError("GROK_API_KEY is not set. Please set it in your environment.")
-        self.client = Grok(api_key=GROK_API_KEY)
+        self.client = OpenAI(api_key=GROK_API_KEY, base_url=XAI_BASE_URL)
 
     def generate_plan(self, user_profile: Dict[str, Any]) -> Dict[str, Any]:
         """
