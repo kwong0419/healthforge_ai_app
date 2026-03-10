@@ -1,5 +1,6 @@
 from typing import Dict, Any
 import json
+import re
 
 from groq import Groq
 from config import GROQ_API_KEY, LLM_MODEL_NAME
@@ -29,13 +30,14 @@ class HealthForgeLLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.4,
-            max_tokens=2048,
+            max_tokens=4096,
         )
 
         content = response.choices[0].message.content
+        cleaned = self._clean_json_response(content)
 
         try:
-            parsed = json.loads(content)
+            parsed = json.loads(cleaned)
         except json.JSONDecodeError:
             # Fallback: wrap raw content in a safe JSON structure
             parsed = {
@@ -55,6 +57,17 @@ class HealthForgeLLMClient:
             }
 
         return parsed
+
+    @staticmethod
+    def _clean_json_response(content: str) -> str:
+        """
+        Strip markdown code fences (```json ... ```) that LLMs often wrap around JSON.
+        """
+        content = content.strip()
+        # Remove ```json ... ``` or ``` ... ``` wrapping
+        content = re.sub(r"^```(?:json)?\s*\n?", "", content)
+        content = re.sub(r"\n?```\s*$", "", content)
+        return content.strip()
 
     def _build_user_prompt(self, profile: Dict[str, Any]) -> str:
         """
