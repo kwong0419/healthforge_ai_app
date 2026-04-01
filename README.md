@@ -5,7 +5,7 @@ built with:
 
 - Python
 - Streamlit
-- Grok API
+- Groq API
 - Llama 3.3 Versatile
 
 ## Setup
