@@ -31,6 +31,7 @@ class HealthForgeLLMClient:
             ],
             temperature=0.4,
             max_tokens=4096,
+            response_format={"type": "json_object"},
         )
 
         content = response.choices[0].message.content
@@ -40,23 +41,63 @@ class HealthForgeLLMClient:
             parsed = json.loads(cleaned)
         except json.JSONDecodeError:
             # Fallback: wrap raw content in a safe JSON structure
-            parsed = {
-                "summary": "There was an issue parsing the structured response. Showing raw content.",
-                "workout_plan": {"weekly_split": [], "progression_notes": ""},
-                "nutrition_plan": {
-                    "philosophy": "",
-                    "daily_structure": [],
-                    "grocery_list": [],
-                },
-                "habits_and_lifestyle": {
-                    "sleep": [],
-                    "stress_management": [],
-                    "daily_habits": [],
-                },
-                "disclaimers": [content],
-            }
+            parsed = self._fallback_parse(content)
 
         return parsed
+
+    def update_plan(self, profile: Dict[str, Any], current_plan: Dict[str, Any], chat_history: list, new_feedback: str) -> Dict[str, Any]:
+        """
+        Updates an existing plan using conversation history and new user feedback.
+        """
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
+        # First user message is the profile context
+        messages.append({"role": "user", "content": self._build_user_prompt(profile)})
+        
+        # Append the chat history (if any)
+        for msg in chat_history:
+            messages.append(msg)
+            
+        # Append the current plan so the LLM knows what to modify
+        messages.append({"role": "assistant", "content": json.dumps(current_plan)})
+        
+        # Append the new feedback
+        messages.append({"role": "user", "content": new_feedback})
+
+        response = self.client.chat.completions.create(
+            model=LLM_MODEL_NAME,
+            messages=messages,
+            temperature=0.4,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        cleaned = self._clean_json_response(content)
+
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            parsed = self._fallback_parse(content)
+
+        return parsed
+
+    def _fallback_parse(self, content: str) -> Dict[str, Any]:
+        return {
+            "summary": "There was an issue parsing the structured response. Showing raw content.",
+            "workout_plan": {"weekly_split": [], "progression_notes": ""},
+            "nutrition_plan": {
+                "philosophy": "",
+                "daily_structure": [],
+                "grocery_list": [],
+            },
+            "habits_and_lifestyle": {
+                "sleep": [],
+                "stress_management": [],
+                "daily_habits": [],
+            },
+            "disclaimers": [content],
+        }
 
     @staticmethod
     def _clean_json_response(content: str) -> str:
