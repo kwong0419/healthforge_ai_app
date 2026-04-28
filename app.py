@@ -35,6 +35,8 @@ def main() -> None:
         st.session_state.chat_history = []
     if "profile" not in st.session_state:
         st.session_state.profile = None
+    if "plan_updated" not in st.session_state:
+        st.session_state.plan_updated = False
 
     if submitted:
         with st.spinner("Generating your personalized plan with Llama 3.3 on Groq..."):
@@ -53,6 +55,10 @@ def main() -> None:
         st.info("Fill out your profile and click **Generate Plan** to get started.")
 
     if st.session_state.plan:
+        if st.session_state.plan_updated:
+            st.success("✅ Your plan has been successfully updated based on your feedback!")
+            st.session_state.plan_updated = False
+
         render_plan(st.session_state.plan)
         
         st.markdown("---")
@@ -81,6 +87,7 @@ def main() -> None:
                         st.session_state.chat_history = st.session_state.chat_history[-10:]
                         
                     st.session_state.plan = new_plan
+                    st.session_state.plan_updated = True
                     st.rerun()
                 except Exception as e:
                     st.error("Error updating plan.")
