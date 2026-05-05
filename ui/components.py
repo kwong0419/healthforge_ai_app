@@ -228,3 +228,81 @@ def _render_disclaimers_tab(disclaimers: Any) -> None:
     st.markdown("### Safety & Disclaimers")
     for d in disclaimers:
         st.markdown(f"- {d}")
+
+
+def render_nutrition_from_image() -> Dict[str, Any] | None:
+    """
+    Renders an image upload interface for extracting nutrition data.
+    Returns extracted macro data or None if no image processed.
+    """
+    st.markdown("---")
+    st.subheader("📸 Log Meal from Photo (Beta)")
+    st.write(
+        "Upload a photo of a food label or your meal. Our AI will extract macros "
+        "and help adjust your nutrition plan."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Choose a food image...",
+        type=["jpg", "jpeg", "png"],
+        key="nutrition_image_upload",
+    )
+
+    if uploaded_file is not None:
+        # Display the image
+        st.image(uploaded_file, caption="Uploaded meal photo", use_column_width=True)
+
+        if st.button("Extract Nutrition Info", key="extract_macros_btn"):
+            with st.spinner("Analyzing image with AI vision..."):
+                try:
+                    from services.vision_client import GeminiVisionClient
+                    from config import GEMINI_API_KEY
+
+                    if not GEMINI_API_KEY:
+                        st.error(
+                            "❌ Gemini API key not configured. "
+                            "Please add GEMINI_API_KEY to your environment."
+                        )
+                        return None
+
+                    # Read image bytes
+                    image_bytes = uploaded_file.getvalue()
+                    image_type = f"image/{uploaded_file.type.split('/')[-1]}"
+
+                    # Extract macros
+                    vision_client = GeminiVisionClient(GEMINI_API_KEY)
+                    result = vision_client.extract_macros_from_image(
+                        image_bytes, image_type
+                    )
+
+                    # Display results
+                    if "error" in result:
+                        st.warning(f"⚠️ {result['error']}")
+                        st.info("Try a clearer image or manually adjust your plan.")
+                        return None
+
+                    # Show extracted data
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Protein", f"{result['protein_g']:.1f}g")
+                        st.metric("Fat", f"{result['fat_g']:.1f}g")
+                    with col2:
+                        st.metric("Carbs", f"{result['carbs_g']:.1f}g")
+                        st.metric("Calories", f"{result['calories']:.0f}")
+
+                    st.write(f"**Food**: {result['food_description']}")
+                    st.write(
+                        f"**Confidence**: {result['confidence']} "
+                        f"({result.get('notes', 'No notes')})"
+                    )
+
+                    # Return macro data for plan adjustment
+                    return result
+
+                except ImportError as e:
+                    st.error(f"Missing dependency: {str(e)}")
+                except Exception as e:
+                    st.error(f"Error processing image: {str(e)}")
+                    return None
+
+    return None
