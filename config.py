@@ -6,11 +6,13 @@ load_dotenv()
 # On Streamlit Cloud, secrets live in st.secrets, not os.environ.
 # Fall back to os.getenv for local development via .env file.
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GROQ_API_KEY:
     try:
         import streamlit as st
         GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+        GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", GEMINI_API_KEY)
     except Exception:
         pass
 
