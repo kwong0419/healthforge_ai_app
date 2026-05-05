@@ -10,7 +10,7 @@ st.set_page_config(
 
 from config import APP_NAME, APP_TAGLINE
 from services.planner import HealthForgePlanner
-from ui.components import render_header, render_user_profile_form, render_plan
+from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image
 
 
 def main() -> None:
@@ -60,6 +60,50 @@ def main() -> None:
             st.session_state.plan_updated = False
 
         render_plan(st.session_state.plan)
+
+        # Vision-based nutrition logging
+        extracted_macros = render_nutrition_from_image()
+        if extracted_macros and extracted_macros.get("confidence") != "low":
+            st.markdown("---")
+            st.subheader("Adjust Plan with Extracted Nutrition")
+            
+            if st.button("Update Plan with These Macros", key="update_with_macros_btn"):
+                with st.spinner("Updating your plan based on extracted nutrition..."):
+                    try:
+                        planner = HealthForgePlanner()
+                        
+                        # Build feedback message from extracted macros
+                        macro_feedback = (
+                            f"I just logged a meal with approximately: "
+                            f"{extracted_macros['protein_g']:.0f}g protein, "
+                            f"{extracted_macros['carbs_g']:.0f}g carbs, "
+                            f"{extracted_macros['fat_g']:.0f}g fat "
+                            f"({extracted_macros['calories']:.0f} calories). "
+                            f"Please adjust my remaining meals for today accordingly. "
+                            f"Food logged: {extracted_macros['food_description']}"
+                        )
+                        
+                        new_plan = planner.update_plan(
+                            user_profile=st.session_state.profile,
+                            current_plan=st.session_state.plan,
+                            chat_history=st.session_state.chat_history,
+                            new_feedback=macro_feedback
+                        )
+                        
+                        # Update history
+                        st.session_state.chat_history.append({"role": "assistant", "content": json.dumps(st.session_state.plan)})
+                        st.session_state.chat_history.append({"role": "user", "content": macro_feedback})
+                        
+                        # Keep history short
+                        if len(st.session_state.chat_history) > 10:
+                            st.session_state.chat_history = st.session_state.chat_history[-10:]
+                        
+                        st.session_state.plan = new_plan
+                        st.session_state.plan_updated = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Error updating plan with extracted nutrition.")
+                        st.exception(e)
         
         st.markdown("---")
         st.subheader("Coach Feedback")
