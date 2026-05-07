@@ -5,6 +5,7 @@ Uses Google's Gemini 2.0 Flash model (free tier via AI Studio).
 
 import base64
 import json
+import time
 from typing import Dict, Any
 import requests
 
@@ -17,6 +18,9 @@ class GeminiVisionClient:
 
     # Gemini API endpoint (using AI Studio free tier)
     GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+    # Retry settings for rate-limit handling
+    MAX_RETRIES = 3
 
     def __init__(self, api_key: str) -> None:
         """Initialize with Gemini API key from config."""
@@ -73,34 +77,53 @@ Be conservative in estimates. If you cannot identify the food, return confidence
             ]
         }
 
-        try:
-            response = requests.post(
-                f"{self.GEMINI_API_URL}?key={self.api_key}",
-                json=payload,
-                timeout=30
-            )
-            response.raise_for_status()
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                # Pass the API key via params dict so it never appears in
+                # formatted URL strings or exception messages.
+                response = requests.post(
+                    self.GEMINI_API_URL,
+                    params={"key": self.api_key},
+                    json=payload,
+                    timeout=30
+                )
 
-            result = response.json()
-            
-            # Extract text from Gemini response
-            if "candidates" not in result or not result["candidates"]:
-                return self._error_response("No response from Gemini")
+                # Handle rate-limit with exponential backoff before raising
+                if response.status_code == 429:
+                    if attempt < self.MAX_RETRIES - 1:
+                        time.sleep(2 ** attempt)  # 1s -> 2s -> 4s
+                        continue
+                    return self._error_response(
+                        "Rate limit reached. The free tier allows a limited number of "
+                        "requests per minute — please wait a moment and try again."
+                    )
 
-            candidate = result["candidates"][0]
-            if "content" not in candidate or "parts" not in candidate["content"]:
-                return self._error_response("Invalid Gemini response structure")
+                response.raise_for_status()
 
-            text_content = candidate["content"]["parts"][0].get("text", "")
-            
-            # Parse JSON from response
-            parsed = self._parse_json_response(text_content)
-            return parsed
+                result = response.json()
+                
+                # Extract text from Gemini response
+                if "candidates" not in result or not result["candidates"]:
+                    return self._error_response("No response from Gemini")
 
-        except requests.exceptions.RequestException as e:
-            return self._error_response(f"API request failed: {str(e)}")
-        except (KeyError, IndexError, json.JSONDecodeError) as e:
-            return self._error_response(f"Failed to parse Gemini response: {str(e)}")
+                candidate = result["candidates"][0]
+                if "content" not in candidate or "parts" not in candidate["content"]:
+                    return self._error_response("Invalid Gemini response structure")
+
+                text_content = candidate["content"]["parts"][0].get("text", "")
+                
+                # Parse JSON from response
+                parsed = self._parse_json_response(text_content)
+                return parsed
+
+            except requests.exceptions.RequestException as e:
+                # Scrub API key from the exception message before surfacing it
+                safe_msg = str(e).replace(self.api_key, "***")
+                return self._error_response(f"API request failed: {safe_msg}")
+            except (KeyError, IndexError, json.JSONDecodeError) as e:
+                return self._error_response(f"Failed to parse Gemini response: {str(e)}")
+
+        return self._error_response("Max retries exceeded. Please try again shortly.")
 
     def _parse_json_response(self, text: str) -> Dict[str, Any]:
         """Extract and parse JSON from Gemini response."""
