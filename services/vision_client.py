@@ -1,6 +1,6 @@
 """
 Gemini Vision Service for extracting nutrition data from food images.
-Uses Google's Gemini 1.5 Flash model (free tier via AI Studio).
+Uses Google's Gemini 2.0 Flash model (free tier via AI Studio).
 """
 
 import base64
@@ -16,7 +16,7 @@ class GeminiVisionClient:
     """
 
     # Gemini API endpoint (using AI Studio free tier)
-    GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
     def __init__(self, api_key: str) -> None:
         """Initialize with Gemini API key from config."""
