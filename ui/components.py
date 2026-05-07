@@ -250,7 +250,7 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
 
     if uploaded_file is not None:
         # Display the image
-        st.image(uploaded_file, caption="Uploaded meal photo", use_column_width=True)
+        st.image(uploaded_file, caption="Uploaded meal photo", use_container_width=True)
 
         if st.button("Extract Nutrition Info", key="extract_macros_btn"):
             with st.spinner("Analyzing image with AI vision..."):

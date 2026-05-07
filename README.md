@@ -15,3 +15,13 @@ built with:
 
    ```bash
    pip install -r requirements.txt
+   ```
+
+3. Set up your environment variables:
+   Copy the example environment file:
+   ```bash
+   cp .env.example .env
+   ```
+   Then, open the `.env` file and fill in your API keys:
+   - `GROQ_API_KEY` (for the LLM coach)
+   - `GEMINI_API_KEY` (for the vision features)
