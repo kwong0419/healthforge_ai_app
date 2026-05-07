@@ -8,6 +8,13 @@ built with:
 - Groq API
 - Llama 3.3 Versatile
 
+## Live App
+
+The application is deployed on Streamlit Community Cloud and can be accessed here:
+**[Link to App] (Replace this with your Streamlit App URL)**
+
+> **Note on Inactivity:** Streamlit Community Cloud apps automatically go to sleep after a period of inactivity to conserve resources. If you visit the link and find the app is asleep, simply click the **"Yes, get this app back up!"** button on the screen. The app will wake up and be fully functional within 1-2 minutes.
+
 ## Setup
 
 1. Create and activate a virtual environment.
