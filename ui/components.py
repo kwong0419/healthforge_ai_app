@@ -1,4 +1,5 @@
-from typing import Dict, Any
+from datetime import datetime
+from typing import Dict, Any, List
 import streamlit as st
 
 
@@ -306,3 +307,50 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
                     return None
 
     return None
+
+
+def render_meal_journal(meal_log: List[Dict[str, Any]]) -> None:
+    """
+    Renders the daily meal journal and running macro totals.
+    meal_log is a list of dicts with keys:
+      timestamp, food_description, calories, protein_g, carbs_g, fat_g, confidence, notes
+    """
+    st.markdown("---")
+    st.subheader("📓 Today's Meal Journal")
+
+    if not meal_log:
+        st.info("No meals logged yet. Upload a food photo above and click **Update Plan with These Macros** to start tracking.")
+        return
+
+    # ── Clear log button ──────────────────────────────────────────────────────
+    if st.button("🗑️ Clear Log", key="clear_meal_log_btn"):
+        st.session_state.meal_log = []
+        st.rerun()
+
+    # ── Daily running totals ──────────────────────────────────────────────────
+    total_cal     = sum(m.get("calories",  0) for m in meal_log)
+    total_protein = sum(m.get("protein_g", 0) for m in meal_log)
+    total_carbs   = sum(m.get("carbs_g",   0) for m in meal_log)
+    total_fat     = sum(m.get("fat_g",     0) for m in meal_log)
+
+    st.markdown("#### Daily Totals")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🔥 Calories",  f"{total_cal:.0f} kcal")
+    c2.metric("💪 Protein",   f"{total_protein:.1f} g")
+    c3.metric("🌾 Carbs",     f"{total_carbs:.1f} g")
+    c4.metric("🥑 Fat",       f"{total_fat:.1f} g")
+
+    st.caption(f"{len(meal_log)} meal(s) logged today")
+
+    # ── Per-meal cards ────────────────────────────────────────────────────────
+    st.markdown("#### Logged Meals")
+    for i, meal in enumerate(reversed(meal_log)):  # most recent first
+        label = f"{meal.get('timestamp', '—')}  ·  {meal.get('food_description', 'Unknown food')}  ·  {meal.get('calories', 0):.0f} kcal"
+        with st.expander(label, expanded=(i == 0)):
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Protein", f"{meal.get('protein_g', 0):.1f} g")
+            mc2.metric("Carbs",   f"{meal.get('carbs_g',   0):.1f} g")
+            mc3.metric("Fat",     f"{meal.get('fat_g',     0):.1f} g")
+            confidence = meal.get("confidence", "—")
+            notes      = meal.get("notes", "")
+            st.caption(f"Confidence: **{confidence}**{'  ·  ' + notes if notes else ''}")
