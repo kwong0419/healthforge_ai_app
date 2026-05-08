@@ -40,6 +40,10 @@ def main() -> None:
         st.session_state.plan_updated = False
     if "meal_log" not in st.session_state:
         st.session_state.meal_log = []
+    if "extracted_macros" not in st.session_state:
+        st.session_state.extracted_macros = None
+    if "macro_logged_meal" not in st.session_state:
+        st.session_state.macro_logged_meal = None
 
     if submitted:
         with st.spinner("Generating your personalized plan with Llama 3.3 on Groq..."):
@@ -62,10 +66,16 @@ def main() -> None:
             st.success("✅ Your plan has been successfully updated based on your feedback!")
             st.session_state.plan_updated = False
 
+        if st.session_state.macro_logged_meal:
+            food = st.session_state.macro_logged_meal
+            st.success(f"🍽️ Meal logged: **{food}** — your remaining meals have been adjusted.")
+            st.session_state.macro_logged_meal = None
+
         render_plan(st.session_state.plan)
 
         # Vision-based nutrition logging
-        extracted_macros = render_nutrition_from_image()
+        render_nutrition_from_image()
+        extracted_macros = st.session_state.extracted_macros
         if extracted_macros and extracted_macros.get("confidence") != "low":
             st.markdown("---")
             st.subheader("Adjust Plan with Extracted Nutrition")
@@ -115,6 +125,8 @@ def main() -> None:
 
                         st.session_state.plan = new_plan
                         st.session_state.plan_updated = True
+                        st.session_state.macro_logged_meal = extracted_macros.get("food_description", "your meal")
+                        st.session_state.extracted_macros = None  # clear after use
                         st.rerun()
                     except Exception as e:
                         st.error("Error updating plan with extracted nutrition.")

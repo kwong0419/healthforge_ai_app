@@ -297,6 +297,9 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
                         f"({result.get('notes', 'No notes')})"
                     )
 
+                    # Store in session state so it survives the next rerun
+                    st.session_state.extracted_macros = result
+
                     # Return macro data for plan adjustment
                     return result
 
