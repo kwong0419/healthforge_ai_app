@@ -1,5 +1,6 @@
 import streamlit as st
 import json
+from datetime import datetime
 
 # Must be the very first Streamlit command
 st.set_page_config(
@@ -10,7 +11,7 @@ st.set_page_config(
 
 from config import APP_NAME, APP_TAGLINE
 from services.planner import HealthForgePlanner
-from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image
+from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal
 
 
 def main() -> None:
@@ -37,6 +38,8 @@ def main() -> None:
         st.session_state.profile = None
     if "plan_updated" not in st.session_state:
         st.session_state.plan_updated = False
+    if "meal_log" not in st.session_state:
+        st.session_state.meal_log = []
 
     if submitted:
         with st.spinner("Generating your personalized plan with Llama 3.3 on Groq..."):
@@ -90,14 +93,26 @@ def main() -> None:
                             new_feedback=macro_feedback
                         )
                         
+                        # Append to meal journal
+                        st.session_state.meal_log.append({
+                            "timestamp": datetime.now().strftime("%H:%M"),
+                            "food_description": extracted_macros.get("food_description", "Unknown"),
+                            "calories":  extracted_macros.get("calories",  0),
+                            "protein_g": extracted_macros.get("protein_g", 0),
+                            "carbs_g":   extracted_macros.get("carbs_g",   0),
+                            "fat_g":     extracted_macros.get("fat_g",     0),
+                            "confidence": extracted_macros.get("confidence", "low"),
+                            "notes":     extracted_macros.get("notes", ""),
+                        })
+
                         # Update history
                         st.session_state.chat_history.append({"role": "assistant", "content": json.dumps(st.session_state.plan)})
                         st.session_state.chat_history.append({"role": "user", "content": macro_feedback})
-                        
+
                         # Keep history short
                         if len(st.session_state.chat_history) > 10:
                             st.session_state.chat_history = st.session_state.chat_history[-10:]
-                        
+
                         st.session_state.plan = new_plan
                         st.session_state.plan_updated = True
                         st.rerun()
@@ -105,6 +120,8 @@ def main() -> None:
                         st.error("Error updating plan with extracted nutrition.")
                         st.exception(e)
         
+        render_meal_journal(st.session_state.meal_log)
+
         st.markdown("---")
         st.subheader("Coach Feedback")
         st.write("Tell your AI Coach what you'd like to change (e.g., 'Deadlifts were too heavy', 'I don't eat broccoli').")
