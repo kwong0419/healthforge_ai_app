@@ -5,6 +5,7 @@ import re
 from groq import Groq
 from config import GROQ_API_KEY, LLM_MODEL_NAME
 from prompts.system_prompt import SYSTEM_PROMPT
+from prompts.auditor_prompt import AUDITOR_PROMPT
 
 
 class HealthForgeLLMClient:
@@ -79,6 +80,44 @@ class HealthForgeLLMClient:
             parsed = json.loads(cleaned)
         except json.JSONDecodeError:
             parsed = self._fallback_parse(content)
+
+        return parsed
+
+    def audit_plan(self, profile: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Sends the generated plan to the Safety Auditor for a peer review.
+        Returns a dict with 'status' (PASSED/FAILED) and 'reason'.
+        """
+        # We need the profile so the auditor knows the user's constraints (e.g. allergies, time limit)
+        user_context = self._build_user_prompt(profile)
+        
+        # We provide the generated plan for review
+        plan_json = json.dumps(plan, indent=2)
+        
+        audit_content = f"{user_context}\n\nHere is the generated plan to review:\n{plan_json}"
+
+        response = self.client.chat.completions.create(
+            model=LLM_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": AUDITOR_PROMPT},
+                {"role": "user", "content": audit_content},
+            ],
+            temperature=0.2, # Lower temperature for a stricter, more deterministic audit
+            max_tokens=1024,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        cleaned = self._clean_json_response(content)
+
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # If the auditor itself fails to return valid JSON, assume it failed for safety
+            parsed = {
+                "status": "FAILED",
+                "reason": "Auditor failed to return a valid JSON response. Please ensure the plan is strictly safe and formatted correctly."
+            }
 
         return parsed
 
