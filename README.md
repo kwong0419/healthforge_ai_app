@@ -6,7 +6,7 @@ built with:
 - Python
 - Streamlit
 - Groq API
-- Llama 3.3 Versatile
+- GPT-OSS 120B (via Groq)
 
 ## Live App
 

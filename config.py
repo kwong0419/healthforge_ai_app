@@ -17,7 +17,7 @@ if not GROQ_API_KEY:
         pass
 
 # Groq model name – see https://console.groq.com/docs/models for options
-LLM_MODEL_NAME = "llama-3.3-70b-versatile"
+LLM_MODEL_NAME = "openai/gpt-oss-120b"
 
 APP_NAME = "HealthForge AI"
-APP_TAGLINE = "Evidence-based fitness, nutrition, and habit coaching powered by Llama 3.3 on Groq."
+APP_TAGLINE = "Evidence-based fitness, nutrition, and habit coaching powered by GPT-OSS on Groq."

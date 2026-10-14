@@ -21,7 +21,7 @@ def main() -> None:
         st.markdown("### About")
         st.write(
             "HealthForge AI is a portfolio-grade fitness, nutrition, and habit coach "
-            "powered by Llama 3.3 on Groq. It demonstrates end-to-end LLM integration, "
+            "powered by GPT-OSS on Groq. It demonstrates end-to-end LLM integration, "
             "prompt engineering, and a Streamlit front end."
         )
         st.markdown("---")
@@ -46,7 +46,7 @@ def main() -> None:
         st.session_state.macro_logged_meal = None
 
     if submitted:
-        with st.spinner("Generating your personalized plan with Llama 3.3 on Groq..."):
+        with st.spinner("Generating your personalized plan with GPT-OSS on Groq..."):
             try:
                 planner = HealthForgePlanner()
                 st.session_state.plan = planner.build_full_plan(profile)
