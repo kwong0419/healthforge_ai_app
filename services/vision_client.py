@@ -104,11 +104,11 @@ Be conservative in estimates. If you cannot identify the food, return confidence
                 
                 # Extract text from Gemini response
                 if "candidates" not in result or not result["candidates"]:
-                    return self._error_response("No response from Gemini")
+                    return self._error_response("The image analysis returned no result. Please try again.")
 
                 candidate = result["candidates"][0]
                 if "content" not in candidate or "parts" not in candidate["content"]:
-                    return self._error_response("Invalid Gemini response structure")
+                    return self._error_response("The image analysis returned no result. Please try again.")
 
                 text_content = candidate["content"]["parts"][0].get("text", "")
                 
@@ -116,12 +116,20 @@ Be conservative in estimates. If you cannot identify the food, return confidence
                 parsed = self._parse_json_response(text_content)
                 return parsed
 
-            except requests.exceptions.RequestException as e:
-                # Scrub API key from the exception message before surfacing it
-                safe_msg = str(e).replace(self.api_key, "***")
-                return self._error_response(f"API request failed: {safe_msg}")
-            except (KeyError, IndexError, json.JSONDecodeError) as e:
-                return self._error_response(f"Failed to parse Gemini response: {str(e)}")
+            except requests.exceptions.Timeout:
+                return self._error_response("The image analysis took too long. Please try again.")
+            except requests.exceptions.ConnectionError:
+                return self._error_response(
+                    "Couldn't reach the image analysis service. Check your connection and try again."
+                )
+            except requests.exceptions.HTTPError as e:
+                return self._error_response(self._describe_http_error(e.response.status_code))
+            except requests.exceptions.RequestException:
+                return self._error_response("The image analysis request failed. Please try again.")
+            except (KeyError, IndexError, json.JSONDecodeError):
+                return self._error_response(
+                    "The image analysis returned a response we couldn't read. Please try again."
+                )
 
         return self._error_response("Max retries exceeded. Please try again shortly.")
 
@@ -133,7 +141,7 @@ Be conservative in estimates. If you cannot identify the food, return confidence
             end = text.rfind("}") + 1
             
             if start == -1 or end == 0:
-                return self._error_response("No JSON found in response")
+                return self._error_response("Couldn't find nutrition details in that image. Try a clearer photo.")
             
             json_str = text[start:end]
             parsed = json.loads(json_str)
@@ -141,7 +149,7 @@ Be conservative in estimates. If you cannot identify the food, return confidence
             # Validate required fields
             required = ["protein_g", "carbs_g", "fat_g", "calories", "food_description"]
             if not all(k in parsed for k in required):
-                return self._error_response("Missing required fields in response")
+                return self._error_response("Couldn't estimate full nutrition for that image. Try a clearer photo.")
             
             # Ensure numeric values
             parsed["protein_g"] = float(parsed.get("protein_g", 0))
@@ -151,8 +159,21 @@ Be conservative in estimates. If you cannot identify the food, return confidence
             
             return parsed
 
-        except json.JSONDecodeError:
-            return self._error_response("Failed to parse JSON from response")
+        except (ValueError, TypeError):  # Bad JSON or non-numeric macro values
+            return self._error_response("Couldn't read the nutrition details for that image. Please try again.")
+
+    @staticmethod
+    def _describe_http_error(status_code: int) -> str:
+        """User-facing message for an HTTP error from Gemini."""
+        if status_code in (401, 403):
+            return "The image analysis service rejected the app's API key. This needs to be fixed by the app owner."
+        if status_code == 400:
+            return "The image couldn't be processed. Try a different photo (JPG or PNG)."
+        if status_code == 404:
+            return "The image analysis model is currently unavailable. This needs to be fixed by the app owner."
+        if status_code >= 500:
+            return "The image analysis service is having trouble right now. Please try again in a few minutes."
+        return f"The image analysis request failed (error {status_code}). Please try again."
 
     def _error_response(self, error_msg: str) -> Dict[str, Any]:
         """Return a safe error response structure."""

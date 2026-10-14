@@ -1,6 +1,27 @@
 from typing import Dict, Any
 from services.llm_client import HealthForgeLLMClient
 
+AUDIT_WARNING_MARKER = "did not pass the automated AI safety audit"
+
+
+def failed_safety_audit(plan: Dict[str, Any]) -> bool:
+    return any(AUDIT_WARNING_MARKER in d for d in plan.get("disclaimers", []) if isinstance(d, str))
+
+
+def _set_audit_warning(plan: Dict[str, Any], reason: str | None) -> Dict[str, Any]:
+    """
+    Removes any audit warning carried over from an earlier version (the LLM sees and
+    may copy old disclaimers), then adds a fresh one if this version failed.
+    """
+    disclaimers = [d for d in plan.get("disclaimers", []) if not (isinstance(d, str) and AUDIT_WARNING_MARKER in d)]
+    if reason is not None:
+        disclaimers.append(
+            f"⚠️ WARNING: This plan {AUDIT_WARNING_MARKER}. Please review carefully. "
+            f"Auditor's last concern: {reason}"
+        )
+    plan["disclaimers"] = disclaimers
+    return plan
+
 
 class HealthForgePlanner:
     """
@@ -20,7 +41,7 @@ class HealthForgePlanner:
         for attempt in range(max_retries):
             audit_result = self.llm_client.audit_plan(user_profile, plan)
             if audit_result.get("status") == "PASSED":
-                return plan
+                return _set_audit_warning(plan, reason=None)
             
             # The plan failed the audit. Attempt to auto-fix it.
             reason = audit_result.get("reason", "Safety audit failed.")
@@ -30,8 +51,7 @@ class HealthForgePlanner:
             plan = self.llm_client.update_plan(user_profile, plan, [], auto_feedback)
             
         # If we exhausted retries, append a safety warning and return the plan as-is
-        plan.setdefault("disclaimers", []).append("⚠️ WARNING: This plan did not pass the automated AI safety audit. Please review carefully.")
-        return plan
+        return _set_audit_warning(plan, reason)
 
     def update_plan(self, user_profile: Dict[str, Any], current_plan: Dict[str, Any], chat_history: list, new_feedback: str, max_retries: int = 2) -> Dict[str, Any]:
         """
@@ -43,7 +63,7 @@ class HealthForgePlanner:
         for attempt in range(max_retries):
             audit_result = self.llm_client.audit_plan(user_profile, plan)
             if audit_result.get("status") == "PASSED":
-                return plan
+                return _set_audit_warning(plan, reason=None)
                 
             # The updated plan failed the audit. Attempt to auto-fix it.
             reason = audit_result.get("reason", "Safety audit failed.")
@@ -53,5 +73,4 @@ class HealthForgePlanner:
             plan = self.llm_client.update_plan(user_profile, plan, chat_history, auto_feedback)
             
         # If we exhausted retries, append a safety warning
-        plan.setdefault("disclaimers", []).append("⚠️ WARNING: This updated plan did not pass the automated AI safety audit. Please review carefully.")
-        return plan
+        return _set_audit_warning(plan, reason)

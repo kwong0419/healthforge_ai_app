@@ -10,8 +10,9 @@ st.set_page_config(
 )
 
 from config import APP_NAME, APP_TAGLINE
-from services.planner import HealthForgePlanner
+from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, deserialize_plan, PlanFileError
+from ui.alerts import show_error_alert
 from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values
 
 SWAP_EXERCISES_FEEDBACK = (
@@ -55,7 +56,7 @@ def render_load_plan() -> None:
     try:
         saved = deserialize_plan(uploaded.getvalue())
     except PlanFileError as e:
-        st.error(str(e))
+        st.error(f"**Couldn't load that plan.** {e} Make sure you picked a file downloaded from HealthForge.", icon="🚨")
         return
 
     st.session_state.plan = saved["plan"]
@@ -134,8 +135,7 @@ def render_plan_actions() -> None:
                 st.session_state.flash_message = "🎲 Here's a different version of your plan."
                 st.rerun()
             except Exception as e:
-                st.error("Error generating a different version.")
-                st.exception(e)
+                show_error_alert("generate a different version of your plan", e)
 
     if swap:
         with st.spinner("Swapping in new exercises..."):
@@ -144,8 +144,7 @@ def render_plan_actions() -> None:
                 st.session_state.flash_message = "🔄 New exercises swapped in — same structure as before."
                 st.rerun()
             except Exception as e:
-                st.error("Error swapping exercises.")
-                st.exception(e)
+                show_error_alert("swap in new exercises", e)
 
 
 def main() -> None:
@@ -174,11 +173,7 @@ def main() -> None:
                 st.session_state.profile = profile
                 st.session_state.chat_history = [] # Reset history on new plan
             except Exception as e:
-                st.error(
-                    "There was an error generating your plan. "
-                    "Check your GROQ_API_KEY and console logs."
-                )
-                st.exception(e)
+                show_error_alert("generate your plan", e)
     elif not st.session_state.plan:
         st.info(
             "Fill out your profile and click **Generate Plan** to get started, "
@@ -194,6 +189,15 @@ def main() -> None:
             food = st.session_state.macro_logged_meal
             st.success(f"🍽️ Meal logged: **{food}** — your remaining meals have been adjusted.")
             st.session_state.macro_logged_meal = None
+
+        if failed_safety_audit(st.session_state.plan):
+            st.warning(
+                "**This plan didn't pass the automated safety check.** "
+                "Review it carefully, especially around your injuries and limitations — "
+                "see the Disclaimers tab for the specific concern. You can ask the coach "
+                "to fix it below, or use **Generate a Different Version**.",
+                icon="⚠️",
+            )
 
         render_plan(st.session_state.plan)
         render_plan_actions()
@@ -253,8 +257,7 @@ def main() -> None:
                         st.session_state.extracted_macros = None  # clear after use
                         st.rerun()
                     except Exception as e:
-                        st.error("Error updating plan with extracted nutrition.")
-                        st.exception(e)
+                        show_error_alert("update your plan with this meal", e)
         
         render_meal_journal(st.session_state.meal_log)
 
@@ -270,8 +273,7 @@ def main() -> None:
                     st.session_state.flash_message = "✅ Your plan has been successfully updated based on your feedback!"
                     st.rerun()
                 except Exception as e:
-                    st.error("Error updating plan.")
-                    st.exception(e)
+                    show_error_alert("update your plan with your feedback", e)
 
 
 if __name__ == "__main__":

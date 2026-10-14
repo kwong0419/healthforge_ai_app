@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Dict, Any, List
 import streamlit as st
 
+from ui.alerts import show_error_alert
+
 
 def render_header(app_name: str, tagline: str) -> None:
     st.title(app_name)
@@ -310,8 +312,9 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
 
                     if not GEMINI_API_KEY:
                         st.error(
-                            "❌ Gemini API key not configured. "
-                            "Please add GEMINI_API_KEY to your environment."
+                            "**Meal photo logging isn't available right now.** "
+                            "The app isn't fully configured (missing API key).",
+                            icon="🚨",
                         )
                         return None
 
@@ -327,8 +330,11 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
 
                     # Display results
                     if "error" in result:
-                        st.warning(f"⚠️ {result['error']}")
-                        st.info("Try a clearer image or manually adjust your plan.")
+                        st.warning(
+                            f"**Couldn't analyze this photo.** {result['error']}\n\n"
+                            "You can also describe the meal in Coach Feedback below.",
+                            icon="⚠️",
+                        )
                         return None
 
                     # Show extracted data
@@ -352,10 +358,8 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
                     # Return macro data for plan adjustment
                     return result
 
-                except ImportError as e:
-                    st.error(f"Missing dependency: {str(e)}")
                 except Exception as e:
-                    st.error(f"Error processing image: {str(e)}")
+                    show_error_alert("analyze this photo", e)
                     return None
 
     return None
