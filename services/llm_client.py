@@ -2,21 +2,34 @@ from typing import Dict, Any
 import json
 import re
 
-from groq import Groq
+from groq import Groq, BadRequestError
 from config import GROQ_API_KEY, LLM_MODEL_NAME
 from prompts.system_prompt import SYSTEM_PROMPT
 from prompts.auditor_prompt import AUDITOR_PROMPT
 
+# GPT-OSS is a reasoning model: its hidden reasoning counts toward max_tokens, and if
+# the budget runs out mid-reasoning Groq returns an empty answer and rejects it as
+# invalid JSON. Groq's free tier also rejects any request whose prompt + max_tokens
+# exceeds 8,000 tokens, so each budget is sized to fit under that with its prompt.
+GENERATE_MAX_TOKENS = 5000  # ~900 prompt + ~2,800 plan
+UPDATE_MAX_TOKENS = 4000    # ~3,700 prompt (includes current plan) + ~2,800 plan
+AUDIT_MAX_TOKENS = 3000     # ~3,500 prompt (includes plan) + ~1,000 reasoning/verdict
+
+# Writing the plan JSON needs little reasoning; the auditor keeps the default effort.
+PLAN_REASONING_EFFORT = "low"
+
 
 class HealthForgeLLMClient:
     """
-    Thin wrapper around Groq's LLM client using Llama 3.3 Versatile.
+    Thin wrapper around Groq's LLM client (model set in config.LLM_MODEL_NAME).
     """
 
     def __init__(self) -> None:
         if not GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY is not set. Please set it in your environment.")
-        self.client = Groq(api_key=GROQ_API_KEY)
+        # Extra retries let multi-call flows (generate -> audit -> fix) wait out
+        # per-minute rate limits instead of failing.
+        self.client = Groq(api_key=GROQ_API_KEY, max_retries=5)
 
     def generate_plan(self, user_profile: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -31,7 +44,8 @@ class HealthForgeLLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.4,
-            max_tokens=4096,
+            max_tokens=GENERATE_MAX_TOKENS,
+            reasoning_effort=PLAN_REASONING_EFFORT,
             response_format={"type": "json_object"},
         )
 
@@ -55,9 +69,11 @@ class HealthForgeLLMClient:
         # First user message is the profile context
         messages.append({"role": "user", "content": self._build_user_prompt(profile)})
         
-        # Append the chat history (if any)
+        # Append past feedback only. Earlier plan versions are skipped: the current plan
+        # is sent below, and each old copy would add ~2,700 tokens to the request.
         for msg in chat_history:
-            messages.append(msg)
+            if msg.get("role") == "user":
+                messages.append(msg)
             
         # Append the current plan so the LLM knows what to modify
         messages.append({"role": "assistant", "content": json.dumps(current_plan)})
@@ -69,7 +85,8 @@ class HealthForgeLLMClient:
             model=LLM_MODEL_NAME,
             messages=messages,
             temperature=0.4,
-            max_tokens=4096,
+            max_tokens=UPDATE_MAX_TOKENS,
+            reasoning_effort=PLAN_REASONING_EFFORT,
             response_format={"type": "json_object"},
         )
 
@@ -92,27 +109,33 @@ class HealthForgeLLMClient:
         user_context = self._build_user_prompt(profile)
         
         # We provide the generated plan for review
-        plan_json = json.dumps(plan, indent=2)
+        plan_json = json.dumps(plan)  # Compact to save tokens
         
         audit_content = f"{user_context}\n\nHere is the generated plan to review:\n{plan_json}"
 
-        response = self.client.chat.completions.create(
-            model=LLM_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": AUDITOR_PROMPT},
-                {"role": "user", "content": audit_content},
-            ],
-            temperature=0.2, # Lower temperature for a stricter, more deterministic audit
-            max_tokens=1024,
-            response_format={"type": "json_object"},
-        )
-
-        content = response.choices[0].message.content
-        cleaned = self._clean_json_response(content)
-
         try:
-            parsed = json.loads(cleaned)
+            response = self.client.chat.completions.create(
+                model=LLM_MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": AUDITOR_PROMPT},
+                    {"role": "user", "content": audit_content},
+                ],
+                temperature=0.2, # Lower temperature for a stricter, more deterministic audit
+                max_tokens=AUDIT_MAX_TOKENS,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content
+            parsed = json.loads(self._clean_json_response(content))
+        except BadRequestError as e:
+            # Groq rejects output that isn't valid JSON; treat it like a parse failure below
+            error = (e.body or {}).get("error", {}) if isinstance(e.body, dict) else {}
+            if error.get("code") != "json_validate_failed":
+                raise
+            parsed = None
         except json.JSONDecodeError:
+            parsed = None
+
+        if parsed is None:
             # If the auditor itself fails to return valid JSON, assume it failed for safety
             parsed = {
                 "status": "FAILED",
