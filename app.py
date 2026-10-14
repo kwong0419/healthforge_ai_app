@@ -1,5 +1,7 @@
 import streamlit as st
 import json
+import re
+import unicodedata
 from datetime import datetime
 
 # Must be the very first Streamlit command
@@ -12,6 +14,7 @@ st.set_page_config(
 from config import APP_NAME, APP_TAGLINE
 from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, deserialize_plan, PlanFileError
+from services.pdf_export import build_plan_pdf
 from ui.alerts import show_error_alert
 from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values
 
@@ -91,35 +94,63 @@ def apply_feedback(feedback: str) -> None:
     st.session_state.plan = new_plan
 
 
+@st.cache_data(max_entries=20, show_spinner=False)
+def cached_plan_pdf(plan: dict, profile: dict | None) -> bytes:
+    # Download buttons need their data on every rerun; only rebuild when the plan changes.
+    return build_plan_pdf(plan, profile)
+
+
+def plan_file_stem(profile: dict | None) -> str:
+    """E.g. "healthforge-plan-jose-nunez-2026-10-14" (name omitted if not given)."""
+    name = (profile or {}).get("name") or ""
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")
+    return "-".join(p for p in ["healthforge-plan", slug, f"{datetime.now():%Y-%m-%d}"] if p)
+
+
 def render_plan_actions() -> None:
     """
-    Save the current plan, or ask for a new take on it.
+    Download or save the current plan, or ask for a new take on it.
     """
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+        try:
+            st.download_button(
+                "📄 Download PDF",
+                data=cached_plan_pdf(st.session_state.plan, st.session_state.profile),
+                file_name=f"{plan_file_stem(st.session_state.profile)}.pdf",
+                mime="application/pdf",
+                help="A clean, printable copy of your workout, nutrition, and habits plan.",
+                type="primary",
+                use_container_width=True,
+            )
+        except Exception as e:
+            show_error_alert("create the PDF of your plan", e)
+
+    with col2:
         st.download_button(
-            "💾 Download Plan",
+            "💾 Save Plan File",
             data=serialize_plan(
                 profile=st.session_state.profile,
                 plan=st.session_state.plan,
                 meal_log=st.session_state.meal_log,
                 chat_history=st.session_state.chat_history,
             ),
-            file_name=f"healthforge-plan-{datetime.now():%Y-%m-%d}.json",
+            file_name=f"{plan_file_stem(st.session_state.profile)}.json",
             mime="application/json",
-            help="Save this plan to load it again later from the sidebar.",
+            help="Save this plan to load it back into HealthForge later from the sidebar.",
             use_container_width=True,
         )
 
-    with col2:
+    with col3:
         regenerate = st.button(
             "🎲 Generate a Different Version",
             help="Build a brand-new plan from the same profile.",
             use_container_width=True,
         )
 
-    with col3:
+    with col4:
         swap = st.button(
             "🔄 Swap in New Exercises",
             help="Keep the same structure, but change up the exercises.",
