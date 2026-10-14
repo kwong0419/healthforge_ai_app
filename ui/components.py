@@ -8,96 +8,145 @@ def render_header(app_name: str, tagline: str) -> None:
     st.caption(tagline)
 
 
+AGE_RANGES = ["18-24", "25-34", "35-44", "45-54", "55+"]
+GENDERS = ["Prefer not to say", "Female", "Male", "Non-binary", "Other"]
+EXPERIENCE_LEVELS = ["Beginner", "Intermediate", "Advanced"]
+GOALS = [
+    "Build muscle",
+    "Lose fat",
+    "Improve general health",
+    "Increase strength",
+    "Improve endurance",
+]
+SESSION_LENGTHS = ["30-45 minutes", "45-60 minutes", "60-75 minutes", "75+ minutes"]
+EQUIPMENT_OPTIONS = [
+    "None (bodyweight only)",
+    "Dumbbells",
+    "Barbell",
+    "Machines",
+    "Resistance bands",
+    "Kettlebells",
+    "Cable stack",
+]
+DIET_PREFERENCES = [
+    "No specific preference",
+    "High-protein omnivore",
+    "Vegetarian",
+    "Vegan",
+    "Pescatarian",
+    "Halal",
+    "Kosher",
+]
+
+# Form defaults, keyed by profile field. Widgets read their values from
+# st.session_state["form_<field>"] so a loaded plan can prefill the form.
+PROFILE_FORM_DEFAULTS: Dict[str, Any] = {
+    "name": "",
+    "age_range": "25-34",
+    "gender": "Prefer not to say",
+    "experience_level": "Beginner",
+    "primary_goal": "Build muscle",
+    "secondary_goal": "None",
+    "days_per_week": 4,
+    "session_length": "45-60 minutes",
+    "equipment": ["None (bodyweight only)"],
+    "limitations": "",
+    "diet_preference": "High-protein omnivore",
+    "diet_restrictions": "",
+    "schedule": "",
+    "notes": "",
+}
+
+_SELECT_OPTIONS = {
+    "age_range": AGE_RANGES,
+    "gender": GENDERS,
+    "experience_level": EXPERIENCE_LEVELS,
+    "primary_goal": GOALS,
+    "secondary_goal": ["None"] + GOALS,
+    "session_length": SESSION_LENGTHS,
+    "diet_preference": DIET_PREFERENCES,
+}
+
+
+def _form_key(field: str) -> str:
+    return f"form_{field}"
+
+
+def init_profile_form_state() -> None:
+    for field, default in PROFILE_FORM_DEFAULTS.items():
+        st.session_state.setdefault(_form_key(field), default)
+
+
+def set_profile_form_values(profile: Dict[str, Any]) -> None:
+    """
+    Prefills the profile form from a saved profile. Must run before the form
+    renders. Values that no longer match the form's options are skipped.
+    """
+    for field, default in PROFILE_FORM_DEFAULTS.items():
+        value = profile.get(field, default)
+        if field == "secondary_goal" and not value:
+            value = "None"
+
+        if field in _SELECT_OPTIONS:
+            if value not in _SELECT_OPTIONS[field]:
+                continue
+        elif field == "equipment":
+            if not isinstance(value, list):
+                continue
+            value = [v for v in value if v in EQUIPMENT_OPTIONS]
+        elif field == "days_per_week":
+            if not isinstance(value, int) or not 2 <= value <= 7:
+                continue
+        elif not isinstance(value, str):
+            continue
+
+        st.session_state[_form_key(field)] = value
+
+
 def render_user_profile_form() -> Dict[str, Any]:
     st.subheader("Your Profile")
+    init_profile_form_state()
 
     with st.form("user_profile_form"):
-        name = st.text_input("Name (optional)")
-        age_range = st.selectbox(
-            "Age range",
-            ["18-24", "25-34", "35-44", "45-54", "55+"],
-            index=1,
-        )
-        gender = st.selectbox(
-            "Gender (optional)",
-            ["Prefer not to say", "Female", "Male", "Non-binary", "Other"],
-            index=0,
-        )
+        name = st.text_input("Name (optional)", key=_form_key("name"))
+        age_range = st.selectbox("Age range", AGE_RANGES, key=_form_key("age_range"))
+        gender = st.selectbox("Gender (optional)", GENDERS, key=_form_key("gender"))
         experience_level = st.selectbox(
-            "Training experience",
-            ["Beginner", "Intermediate", "Advanced"],
-            index=0,
+            "Training experience", EXPERIENCE_LEVELS, key=_form_key("experience_level")
         )
-        primary_goal = st.selectbox(
-            "Primary goal",
-            [
-                "Build muscle",
-                "Lose fat",
-                "Improve general health",
-                "Increase strength",
-                "Improve endurance",
-            ],
-            index=0,
-        )
+        primary_goal = st.selectbox("Primary goal", GOALS, key=_form_key("primary_goal"))
         secondary_goal = st.selectbox(
-            "Secondary goal (optional)",
-            [
-                "None",
-                "Build muscle",
-                "Lose fat",
-                "Improve general health",
-                "Increase strength",
-                "Improve endurance",
-            ],
-            index=0,
+            "Secondary goal (optional)", ["None"] + GOALS, key=_form_key("secondary_goal")
         )
-        days_per_week = st.slider("Training days per week", 2, 7, 4)
+        days_per_week = st.slider("Training days per week", 2, 7, key=_form_key("days_per_week"))
         session_length = st.selectbox(
-            "Typical session length",
-            ["30-45 minutes", "45-60 minutes", "60-75 minutes", "75+ minutes"],
-            index=1,
+            "Typical session length", SESSION_LENGTHS, key=_form_key("session_length")
         )
         equipment = st.multiselect(
-            "Equipment available",
-            [
-                "None (bodyweight only)",
-                "Dumbbells",
-                "Barbell",
-                "Machines",
-                "Resistance bands",
-                "Kettlebells",
-                "Cable stack",
-            ],
-            default=["None (bodyweight only)"],
+            "Equipment available", EQUIPMENT_OPTIONS, key=_form_key("equipment")
         )
         limitations = st.text_area(
             "Injuries / limitations (non-medical description)",
             placeholder="E.g., mild knee discomfort with deep squats, avoid overhead pressing, etc.",
+            key=_form_key("limitations"),
         )
         diet_preference = st.selectbox(
-            "Dietary preference",
-            [
-                "No specific preference",
-                "High-protein omnivore",
-                "Vegetarian",
-                "Vegan",
-                "Pescatarian",
-                "Halal",
-                "Kosher",
-            ],
-            index=1,
+            "Dietary preference", DIET_PREFERENCES, key=_form_key("diet_preference")
         )
         diet_restrictions = st.text_input(
             "Dietary restrictions",
             placeholder="E.g., lactose intolerant, gluten-free, nut allergy (do NOT ask for medical treatment).",
+            key=_form_key("diet_restrictions"),
         )
         schedule = st.text_area(
             "Typical weekly schedule / constraints",
             placeholder="E.g., office job 9-5, can train mornings or evenings, weekends more flexible.",
+            key=_form_key("schedule"),
         )
         notes = st.text_area(
             "Additional notes or preferences",
             placeholder="E.g., prefer dumbbells over barbells, like group classes, hate running, etc.",
+            key=_form_key("notes"),
         )
 
         submitted = st.form_submit_button("Generate Plan")

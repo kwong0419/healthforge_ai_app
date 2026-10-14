@@ -11,11 +11,146 @@ st.set_page_config(
 
 from config import APP_NAME, APP_TAGLINE
 from services.planner import HealthForgePlanner
-from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal
+from services.plan_storage import serialize_plan, deserialize_plan, PlanFileError
+from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values
+
+SWAP_EXERCISES_FEEDBACK = (
+    "Keep the same weekly structure, training days, and session lengths, "
+    "but swap in different exercises for variety. Keep respecting my injuries/limitations, "
+    "equipment, and preferences."
+)
+
+
+def init_session_state() -> None:
+    defaults = {
+        "plan": None,
+        "chat_history": [],
+        "profile": None,
+        "flash_message": None,
+        "meal_log": [],
+        "extracted_macros": None,
+        "macro_logged_meal": None,
+        "loaded_plan_file_id": None,
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+
+def render_load_plan() -> None:
+    """
+    Sidebar uploader that restores a previously saved plan. Runs before the
+    profile form so the form can be prefilled with the saved profile.
+    """
+    st.markdown("### Load a Saved Plan")
+    uploaded = st.file_uploader(
+        "Upload a plan you downloaded earlier",
+        type=["json"],
+        key="plan_file_uploader",
+    )
+    # The uploader keeps its file across reruns, so only load each file once.
+    if uploaded is None or uploaded.file_id == st.session_state.loaded_plan_file_id:
+        return
+
+    st.session_state.loaded_plan_file_id = uploaded.file_id
+    try:
+        saved = deserialize_plan(uploaded.getvalue())
+    except PlanFileError as e:
+        st.error(str(e))
+        return
+
+    st.session_state.plan = saved["plan"]
+    st.session_state.profile = saved["profile"]
+    st.session_state.meal_log = saved["meal_log"]
+    st.session_state.chat_history = saved["chat_history"]
+    st.session_state.extracted_macros = None
+    set_profile_form_values(saved["profile"])
+    st.session_state.flash_message = "📂 Saved plan loaded."
+
+
+def apply_feedback(feedback: str) -> None:
+    """
+    Sends feedback to the coach, records the exchange, and swaps in the updated plan.
+    """
+    planner = HealthForgePlanner()
+    new_plan = planner.update_plan(
+        user_profile=st.session_state.profile,
+        current_plan=st.session_state.plan,
+        chat_history=st.session_state.chat_history,
+        new_feedback=feedback
+    )
+
+    # Update history to store this exchange for next time
+    st.session_state.chat_history.append({"role": "assistant", "content": json.dumps(st.session_state.plan)})
+    st.session_state.chat_history.append({"role": "user", "content": feedback})
+
+    # Keep history short (last 5 interactions = 10 messages)
+    if len(st.session_state.chat_history) > 10:
+        st.session_state.chat_history = st.session_state.chat_history[-10:]
+
+    st.session_state.plan = new_plan
+
+
+def render_plan_actions() -> None:
+    """
+    Save the current plan, or ask for a new take on it.
+    """
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.download_button(
+            "💾 Download Plan",
+            data=serialize_plan(
+                profile=st.session_state.profile,
+                plan=st.session_state.plan,
+                meal_log=st.session_state.meal_log,
+                chat_history=st.session_state.chat_history,
+            ),
+            file_name=f"healthforge-plan-{datetime.now():%Y-%m-%d}.json",
+            mime="application/json",
+            help="Save this plan to load it again later from the sidebar.",
+            use_container_width=True,
+        )
+
+    with col2:
+        regenerate = st.button(
+            "🎲 Generate a Different Version",
+            help="Build a brand-new plan from the same profile.",
+            use_container_width=True,
+        )
+
+    with col3:
+        swap = st.button(
+            "🔄 Swap in New Exercises",
+            help="Keep the same structure, but change up the exercises.",
+            use_container_width=True,
+        )
+
+    if regenerate:
+        with st.spinner("Generating a different version of your plan..."):
+            try:
+                planner = HealthForgePlanner()
+                st.session_state.plan = planner.build_full_plan(st.session_state.profile)
+                st.session_state.chat_history = []  # New plan, fresh conversation
+                st.session_state.flash_message = "🎲 Here's a different version of your plan."
+                st.rerun()
+            except Exception as e:
+                st.error("Error generating a different version.")
+                st.exception(e)
+
+    if swap:
+        with st.spinner("Swapping in new exercises..."):
+            try:
+                apply_feedback(SWAP_EXERCISES_FEEDBACK)
+                st.session_state.flash_message = "🔄 New exercises swapped in — same structure as before."
+                st.rerun()
+            except Exception as e:
+                st.error("Error swapping exercises.")
+                st.exception(e)
 
 
 def main() -> None:
     render_header(APP_NAME, APP_TAGLINE)
+    init_session_state()
 
     with st.sidebar:
         st.markdown("### About")
@@ -26,24 +161,10 @@ def main() -> None:
         )
         st.markdown("---")
         st.write("**Note:** This is not medical advice. Always consult a professional for health concerns.")
+        st.markdown("---")
+        render_load_plan()
 
     profile, submitted = render_user_profile_form()
-
-    # Initialize Session State
-    if "plan" not in st.session_state:
-        st.session_state.plan = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    if "profile" not in st.session_state:
-        st.session_state.profile = None
-    if "plan_updated" not in st.session_state:
-        st.session_state.plan_updated = False
-    if "meal_log" not in st.session_state:
-        st.session_state.meal_log = []
-    if "extracted_macros" not in st.session_state:
-        st.session_state.extracted_macros = None
-    if "macro_logged_meal" not in st.session_state:
-        st.session_state.macro_logged_meal = None
 
     if submitted:
         with st.spinner("Generating your personalized plan with GPT-OSS on Groq..."):
@@ -59,12 +180,15 @@ def main() -> None:
                 )
                 st.exception(e)
     elif not st.session_state.plan:
-        st.info("Fill out your profile and click **Generate Plan** to get started.")
+        st.info(
+            "Fill out your profile and click **Generate Plan** to get started, "
+            "or load a saved plan from the sidebar."
+        )
 
     if st.session_state.plan:
-        if st.session_state.plan_updated:
-            st.success("✅ Your plan has been successfully updated based on your feedback!")
-            st.session_state.plan_updated = False
+        if st.session_state.flash_message:
+            st.success(st.session_state.flash_message)
+            st.session_state.flash_message = None
 
         if st.session_state.macro_logged_meal:
             food = st.session_state.macro_logged_meal
@@ -72,6 +196,7 @@ def main() -> None:
             st.session_state.macro_logged_meal = None
 
         render_plan(st.session_state.plan)
+        render_plan_actions()
 
         # Vision-based nutrition logging
         render_nutrition_from_image()
@@ -124,7 +249,6 @@ def main() -> None:
                             st.session_state.chat_history = st.session_state.chat_history[-10:]
 
                         st.session_state.plan = new_plan
-                        st.session_state.plan_updated = True
                         st.session_state.macro_logged_meal = extracted_macros.get("food_description", "your meal")
                         st.session_state.extracted_macros = None  # clear after use
                         st.rerun()
@@ -142,25 +266,8 @@ def main() -> None:
         if feedback:
             with st.spinner("Updating your plan..."):
                 try:
-                    planner = HealthForgePlanner()
-                    
-                    new_plan = planner.update_plan(
-                        user_profile=st.session_state.profile,
-                        current_plan=st.session_state.plan,
-                        chat_history=st.session_state.chat_history,
-                        new_feedback=feedback
-                    )
-                    
-                    # Update history to store this exchange for next time
-                    st.session_state.chat_history.append({"role": "assistant", "content": json.dumps(st.session_state.plan)})
-                    st.session_state.chat_history.append({"role": "user", "content": feedback})
-                    
-                    # Keep history short (last 5 interactions = 10 messages)
-                    if len(st.session_state.chat_history) > 10:
-                        st.session_state.chat_history = st.session_state.chat_history[-10:]
-                        
-                    st.session_state.plan = new_plan
-                    st.session_state.plan_updated = True
+                    apply_feedback(feedback)
+                    st.session_state.flash_message = "✅ Your plan has been successfully updated based on your feedback!"
                     st.rerun()
                 except Exception as e:
                     st.error("Error updating plan.")
