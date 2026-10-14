@@ -40,8 +40,8 @@ DIET_PREFERENCES = [
     "Kosher",
 ]
 
-# Form defaults, keyed by profile field. Widgets read their values from
-# st.session_state["form_<field>"] so a loaded plan can prefill the form.
+# Form defaults, keyed by profile field. A loaded plan replaces these with its own
+# profile (see set_profile_form_values).
 PROFILE_FORM_DEFAULTS: Dict[str, Any] = {
     "name": "",
     "age_range": "25-34",
@@ -71,21 +71,24 @@ _SELECT_OPTIONS = {
 
 
 def _form_key(field: str) -> str:
-    return f"form_{field}"
+    # The version changes whenever a saved plan is loaded, so every field becomes a
+    # brand-new widget that starts from the loaded value. This also discards anything
+    # typed into the form but never submitted.
+    return f"form_{field}_v{st.session_state.get('profile_form_version', 0)}"
 
 
-def init_profile_form_state() -> None:
-    for field, default in PROFILE_FORM_DEFAULTS.items():
-        st.session_state.setdefault(_form_key(field), default)
+def _form_values() -> Dict[str, Any]:
+    return st.session_state.get("profile_form_values", PROFILE_FORM_DEFAULTS)
 
 
 def set_profile_form_values(profile: Dict[str, Any]) -> None:
     """
     Prefills the profile form from a saved profile. Must run before the form
-    renders. Values that no longer match the form's options are skipped.
+    renders. Values that no longer match the form's options fall back to defaults.
     """
-    for field, default in PROFILE_FORM_DEFAULTS.items():
-        value = profile.get(field, default)
+    values = dict(PROFILE_FORM_DEFAULTS)
+    for field in PROFILE_FORM_DEFAULTS:
+        value = profile.get(field)
         if field == "secondary_goal" and not value:
             value = "None"
 
@@ -102,51 +105,59 @@ def set_profile_form_values(profile: Dict[str, Any]) -> None:
         elif not isinstance(value, str):
             continue
 
-        st.session_state[_form_key(field)] = value
+        values[field] = value
+
+    # Values are passed to the widgets as their starting values rather than set through
+    # st.session_state: Streamlit 1.40 can show text areas blank when their value is
+    # changed through session state after the first load.
+    st.session_state.profile_form_values = values
+    st.session_state.profile_form_version = st.session_state.get("profile_form_version", 0) + 1
 
 
 def render_user_profile_form() -> Dict[str, Any]:
     st.subheader("Your Profile")
-    init_profile_form_state()
+    v = _form_values()
+
+    def select(label: str, field: str) -> str:
+        options = _SELECT_OPTIONS[field]
+        return st.selectbox(label, options, index=options.index(v[field]), key=_form_key(field))
 
     with st.form("user_profile_form"):
-        name = st.text_input("Name (optional)", key=_form_key("name"))
-        age_range = st.selectbox("Age range", AGE_RANGES, key=_form_key("age_range"))
-        gender = st.selectbox("Gender (optional)", GENDERS, key=_form_key("gender"))
-        experience_level = st.selectbox(
-            "Training experience", EXPERIENCE_LEVELS, key=_form_key("experience_level")
+        name = st.text_input("Name (optional)", value=v["name"], key=_form_key("name"))
+        age_range = select("Age range", "age_range")
+        gender = select("Gender (optional)", "gender")
+        experience_level = select("Training experience", "experience_level")
+        primary_goal = select("Primary goal", "primary_goal")
+        secondary_goal = select("Secondary goal (optional)", "secondary_goal")
+        days_per_week = st.slider(
+            "Training days per week", 2, 7, value=v["days_per_week"], key=_form_key("days_per_week")
         )
-        primary_goal = st.selectbox("Primary goal", GOALS, key=_form_key("primary_goal"))
-        secondary_goal = st.selectbox(
-            "Secondary goal (optional)", ["None"] + GOALS, key=_form_key("secondary_goal")
-        )
-        days_per_week = st.slider("Training days per week", 2, 7, key=_form_key("days_per_week"))
-        session_length = st.selectbox(
-            "Typical session length", SESSION_LENGTHS, key=_form_key("session_length")
-        )
+        session_length = select("Typical session length", "session_length")
         equipment = st.multiselect(
-            "Equipment available", EQUIPMENT_OPTIONS, key=_form_key("equipment")
+            "Equipment available", EQUIPMENT_OPTIONS, default=v["equipment"], key=_form_key("equipment")
         )
         limitations = st.text_area(
             "Injuries / limitations (non-medical description)",
+            value=v["limitations"],
             placeholder="E.g., mild knee discomfort with deep squats, avoid overhead pressing, etc.",
             key=_form_key("limitations"),
         )
-        diet_preference = st.selectbox(
-            "Dietary preference", DIET_PREFERENCES, key=_form_key("diet_preference")
-        )
+        diet_preference = select("Dietary preference", "diet_preference")
         diet_restrictions = st.text_input(
             "Dietary restrictions",
+            value=v["diet_restrictions"],
             placeholder="E.g., lactose intolerant, gluten-free, nut allergy (do NOT ask for medical treatment).",
             key=_form_key("diet_restrictions"),
         )
         schedule = st.text_area(
             "Typical weekly schedule / constraints",
+            value=v["schedule"],
             placeholder="E.g., office job 9-5, can train mornings or evenings, weekends more flexible.",
             key=_form_key("schedule"),
         )
         notes = st.text_area(
             "Additional notes or preferences",
+            value=v["notes"],
             placeholder="E.g., prefer dumbbells over barbells, like group classes, hate running, etc.",
             key=_form_key("notes"),
         )
