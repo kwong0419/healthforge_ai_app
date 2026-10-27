@@ -16,13 +16,7 @@ from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, deserialize_plan, PlanFileError
 from services.pdf_export import build_plan_pdf
 from ui.alerts import show_error_alert
-from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values
-
-SWAP_EXERCISES_FEEDBACK = (
-    "Keep the same weekly structure, training days, and session lengths, "
-    "but swap in different exercises for variety. Keep respecting my injuries/limitations, "
-    "equipment, and preferences."
-)
+from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids
 
 
 def init_session_state() -> None:
@@ -150,10 +144,14 @@ def render_plan_actions() -> None:
             use_container_width=True,
         )
 
+    swap_ids = selected_swap_ids(st.session_state.plan)
     with col4:
         swap = st.button(
-            "🔄 Swap in New Exercises",
-            help="Keep the same structure, but change up the exercises.",
+            f"🔄 Swap {len(swap_ids)} Selected Exercise{'' if len(swap_ids) == 1 else 's'}"
+            if swap_ids else "🔄 Swap Selected Exercises",
+            help="Replace only the exercises you ticked; everything else stays the same."
+            if swap_ids else "Tick exercises in the Workout Plan tab to choose which ones to swap.",
+            disabled=not swap_ids,
             use_container_width=True,
         )
 
@@ -169,13 +167,18 @@ def render_plan_actions() -> None:
                 show_error_alert("generate a different version of your plan", e)
 
     if swap:
-        with st.spinner("Swapping in new exercises..."):
+        with st.spinner(f"Finding replacements for {len(swap_ids)} exercise{'' if len(swap_ids) == 1 else 's'}..."):
             try:
-                apply_feedback(SWAP_EXERCISES_FEEDBACK)
-                st.session_state.flash_message = "🔄 New exercises swapped in — same structure as before."
+                planner = HealthForgePlanner()
+                st.session_state.plan, changes = planner.swap_exercises(
+                    st.session_state.profile, st.session_state.plan, swap_ids
+                )
+                st.session_state.flash_message = "🔄 Swapped: " + "; ".join(
+                    f"{old} → **{new}**" for old, new in changes
+                )
                 st.rerun()
             except Exception as e:
-                show_error_alert("swap in new exercises", e)
+                show_error_alert("swap the selected exercises", e)
 
 
 def main() -> None:

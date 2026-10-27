@@ -41,6 +41,11 @@ def describe_error(error: Exception) -> Tuple[str, str]:
             "The AI service is having trouble right now.",
             "Please try again in a few minutes.",
         )
+    if isinstance(error, ValueError) and str(error).startswith("The AI coach didn't suggest replacements"):
+        return (
+            "The AI coach couldn't find replacements for every exercise you picked.",
+            "Please try again. Nothing in your plan was changed.",
+        )
     if isinstance(error, ValueError) and "API_KEY is not set" in str(error):
         return (
             "The app isn't fully configured yet (missing API key).",

@@ -211,6 +211,23 @@ def render_plan(plan: Dict[str, Any]) -> None:
         _render_disclaimers_tab(disclaimers)
 
 
+def _swap_key(day_index: int, exercise_index: int, exercise: Dict[str, Any]) -> str:
+    # Includes the name so a swapped-in exercise starts unticked.
+    return f"swap_pick_{day_index}_{exercise_index}_{exercise.get('name', '')}"
+
+
+def selected_swap_ids(plan: Dict[str, Any]) -> List[str]:
+    """
+    Exercises ticked for swapping in the Workout Plan tab, as "d<day>e<exercise>" ids.
+    """
+    selected = []
+    for d, day in enumerate(plan.get("workout_plan", {}).get("weekly_split", [])):
+        for e, ex in enumerate(day.get("exercises", [])):
+            if isinstance(ex, dict) and st.session_state.get(_swap_key(d, e, ex)):
+                selected.append(f"d{d}e{e}")
+    return selected
+
+
 def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
     weekly_split = workout_plan.get("weekly_split", [])
     progression_notes = workout_plan.get("progression_notes", "")
@@ -219,14 +236,22 @@ def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
         st.info("No workout plan available.")
         return
 
-    for day in weekly_split:
+    st.caption(
+        "☑️ Tick any exercises you'd like to replace, then click "
+        "**Swap Selected Exercises** below the plan."
+    )
+
+    for d, day in enumerate(weekly_split):
         st.markdown(f"### {day.get('day', 'Day')}")
         st.write(day.get("focus", ""))
 
         exercises = day.get("exercises", [])
         if exercises:
-            for ex in exercises:
-                st.markdown(f"- **{ex.get('name', 'Exercise')}**")
+            for e, ex in enumerate(exercises):
+                if not isinstance(ex, dict):
+                    st.markdown(f"- {ex}")
+                    continue
+                st.checkbox(f"**{ex.get('name', 'Exercise')}**", key=_swap_key(d, e, ex))
                 st.write(
                     f"  Sets: {ex.get('sets', '')} | Reps: {ex.get('reps', '')}  \n"
                     f"  Notes: {ex.get('notes', '')}"

@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 import json
 import re
 
@@ -6,6 +6,7 @@ from groq import Groq, BadRequestError
 from config import GROQ_API_KEY, LLM_MODEL_NAME
 from prompts.system_prompt import SYSTEM_PROMPT
 from prompts.auditor_prompt import AUDITOR_PROMPT
+from prompts.swap_prompt import SWAP_PROMPT
 
 # GPT-OSS is a reasoning model: its hidden reasoning counts toward max_tokens, and if
 # the budget runs out mid-reasoning Groq returns an empty answer and rejects it as
@@ -14,6 +15,7 @@ from prompts.auditor_prompt import AUDITOR_PROMPT
 GENERATE_MAX_TOKENS = 5000  # ~900 prompt + ~2,800 plan
 UPDATE_MAX_TOKENS = 4000    # ~3,700 prompt (includes current plan) + ~2,800 plan
 AUDIT_MAX_TOKENS = 3000     # ~3,500 prompt (includes plan) + ~1,000 reasoning/verdict
+SWAP_MAX_TOKENS = 3000      # ~1,500 prompt (exercise names only) + reasoning + a few exercises
 
 # Writing the plan JSON needs little reasoning; the auditor keeps the default effort.
 PLAN_REASONING_EFFORT = "low"
@@ -172,10 +174,63 @@ class HealthForgeLLMClient:
         content = re.sub(r"\n?```\s*$", "", content)
         return content.strip()
 
+    def suggest_exercise_swaps(
+        self,
+        profile: Dict[str, Any],
+        plan: Dict[str, Any],
+        swap_ids: List[str],
+        extra_instructions: str = "",
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Asks for replacements for specific exercises only, identified as "d<day>e<exercise>"
+        (e.g. "d0e2" is the third exercise on the first day). Returns {id: new exercise}.
+        Only exercise names are sent for context, so this stays small and fast.
+        """
+        overview = []
+        for d, day in enumerate(plan.get("workout_plan", {}).get("weekly_split", [])):
+            overview.append(f"{day.get('day', f'Day {d + 1}')} (focus: {day.get('focus', 'n/a')})")
+            for e, ex in enumerate(day.get("exercises", [])):
+                ex_id = f"d{d}e{e}"
+                marker = "  <-- REPLACE" if ex_id in swap_ids else ""
+                details = f"{ex.get('name')} - {ex.get('sets')} x {ex.get('reps')}" if isinstance(ex, dict) else str(ex)
+                overview.append(f"  [{ex_id}] {details}{marker}")
+
+        content = (
+            f"{self._profile_summary(profile)}\n"
+            "Current workout plan:\n" + "\n".join(overview) + "\n\n"
+            f"Replace exactly these exercises: {', '.join(swap_ids)}."
+        )
+        if extra_instructions:
+            content += f"\n\n{extra_instructions}"
+
+        response = self.client.chat.completions.create(
+            model=LLM_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SWAP_PROMPT},
+                {"role": "user", "content": content},
+            ],
+            temperature=0.6,  # Higher than plan writing, so swaps feel genuinely new
+            max_tokens=SWAP_MAX_TOKENS,
+            response_format={"type": "json_object"},
+        )
+
+        parsed = json.loads(self._clean_json_response(response.choices[0].message.content))
+        return {
+            r["id"]: {key: r.get(key, "") for key in ("name", "sets", "reps", "notes")}
+            for r in parsed.get("replacements", [])
+            if isinstance(r, dict) and r.get("id") in swap_ids and r.get("name")
+        }
+
     def _build_user_prompt(self, profile: Dict[str, Any]) -> str:
         """
         Convert the user profile dict into a natural language + structured description.
         """
+        return f"""{self._profile_summary(profile)}
+Please generate a safe, evidence-based plan in the required JSON format.
+"""
+
+    @staticmethod
+    def _profile_summary(profile: Dict[str, Any]) -> str:
         return f"""
 User profile for personalized fitness, nutrition, and habit plan:
 
@@ -193,6 +248,4 @@ User profile for personalized fitness, nutrition, and habit plan:
 - Dietary restrictions: {profile.get("diet_restrictions")}
 - Typical schedule / constraints: {profile.get("schedule")}
 - Additional notes: {profile.get("notes")}
-
-Please generate a safe, evidence-based plan in the required JSON format.
 """
