@@ -13,7 +13,7 @@ st.set_page_config(
 
 from config import APP_NAME, APP_TAGLINE
 from services.planner import HealthForgePlanner, failed_safety_audit
-from services.plan_storage import serialize_plan, deserialize_plan, PlanFileError
+from services.plan_storage import serialize_plan, load_plan_file, PlanFileError
 from services.pdf_export import build_plan_pdf
 from ui.alerts import show_error_alert
 from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids
@@ -41,8 +41,8 @@ def render_load_plan() -> None:
     """
     st.markdown("### Load a Saved Plan")
     uploaded = st.file_uploader(
-        "Upload a plan you downloaded earlier",
-        type=["json"],
+        "Upload a plan PDF or plan file you downloaded from HealthForge",
+        type=["pdf", "json"],
         key="plan_file_uploader",
     )
     # The uploader keeps its file across reruns, so only load each file once.
@@ -51,9 +51,9 @@ def render_load_plan() -> None:
 
     st.session_state.loaded_plan_file_id = uploaded.file_id
     try:
-        saved = deserialize_plan(uploaded.getvalue())
+        saved = load_plan_file(uploaded.getvalue())
     except PlanFileError as e:
-        st.error(f"**Couldn't load that plan.** {e} Make sure you picked a file downloaded from HealthForge.", icon="🚨")
+        st.error(f"**Couldn't load that plan.** {e}", icon="🚨")
         return
 
     st.session_state.plan = saved["plan"]
@@ -89,9 +89,11 @@ def apply_feedback(feedback: str) -> None:
 
 
 @st.cache_data(max_entries=20, show_spinner=False)
-def cached_plan_pdf(plan: dict, profile: dict | None) -> bytes:
+def cached_plan_pdf(plan: dict, profile: dict | None, meal_log: list, chat_history: list) -> bytes:
     # Download buttons need their data on every rerun; only rebuild when the plan changes.
-    return build_plan_pdf(plan, profile)
+    # The PDF carries the full save data, so it can be uploaded later to reload the plan.
+    save_data = serialize_plan(profile=profile, plan=plan, meal_log=meal_log, chat_history=chat_history)
+    return build_plan_pdf(plan, profile, save_data=save_data)
 
 
 def plan_file_stem(profile: dict | None) -> str:
@@ -112,10 +114,16 @@ def render_plan_actions() -> None:
         try:
             st.download_button(
                 "📄 Download PDF",
-                data=cached_plan_pdf(st.session_state.plan, st.session_state.profile),
+                data=cached_plan_pdf(
+                    st.session_state.plan,
+                    st.session_state.profile,
+                    st.session_state.meal_log,
+                    st.session_state.chat_history,
+                ),
                 file_name=f"{plan_file_stem(st.session_state.profile)}.pdf",
                 mime="application/pdf",
-                help="A clean, printable copy of your workout, nutrition, and habits plan.",
+                help="A clean, printable copy of your plan. You can also upload this PDF "
+                "from the sidebar later to reload your plan.",
                 type="primary",
                 use_container_width=True,
             )
@@ -132,7 +140,9 @@ def render_plan_actions() -> None:
                 chat_history=st.session_state.chat_history,
             ),
             file_name=f"{plan_file_stem(st.session_state.profile)}.json",
-            mime="application/json",
+            # A generic type makes phone browsers download the file instead of opening it
+            # as a page (which saves it as .html and breaks reloading).
+            mime="application/octet-stream",
             help="Save this plan to load it back into HealthForge later from the sidebar.",
             use_container_width=True,
         )

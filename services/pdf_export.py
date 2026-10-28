@@ -12,6 +12,7 @@ from fpdf import FPDF
 from fpdf.fonts import FontFace
 
 from services.planner import failed_safety_audit
+from services.plan_storage import PDF_ATTACHMENT_NAME
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 FONT_FAMILY = "DejaVu"
@@ -174,9 +175,11 @@ class PlanPDF(FPDF):
         return len(lines) * LINE_HEIGHT
 
 
-def build_plan_pdf(plan: Dict[str, Any], profile: Dict[str, Any] | None) -> bytes:
+def build_plan_pdf(plan: Dict[str, Any], profile: Dict[str, Any] | None, save_data: str | None = None) -> bytes:
     """
     Renders the full plan (workout, nutrition, habits, disclaimers) as PDF bytes.
+    If save_data (a serialized plan file) is given, it's attached inside the PDF so
+    the PDF can be uploaded back into HealthForge to restore the plan.
     """
     profile = profile or {}
     pdf = PlanPDF()
@@ -189,6 +192,14 @@ def build_plan_pdf(plan: Dict[str, Any], profile: Dict[str, Any] | None) -> byte
     _render_nutrition(pdf, plan.get("nutrition_plan") or {})
     _render_habits(pdf, plan.get("habits_and_lifestyle") or {})
     _render_disclaimers(pdf, plan.get("disclaimers"))
+
+    if save_data:
+        pdf.embed_file(
+            bytes=save_data.encode("utf-8"),
+            basename=PDF_ATTACHMENT_NAME,
+            mime_type="application/json",
+            desc="HealthForge plan data (upload this PDF to HealthForge to reload your plan)",
+        )
 
     return bytes(pdf.output())
 

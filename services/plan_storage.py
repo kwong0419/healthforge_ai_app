@@ -1,9 +1,15 @@
+import io
 import json
 from datetime import datetime
 from typing import Dict, Any, List
 
+from pypdf import PdfReader
+
 SAVE_FORMAT = "healthforge-plan"
 SAVE_VERSION = 1
+
+# Name of the plan data file attached inside downloaded PDFs.
+PDF_ATTACHMENT_NAME = "healthforge-plan.json"
 
 
 class PlanFileError(ValueError):
@@ -29,6 +35,31 @@ def serialize_plan(
         "chat_history": chat_history,
     }
     return json.dumps(payload, indent=2)
+
+
+def load_plan_file(raw: bytes) -> Dict[str, Any]:
+    """
+    Loads a plan from an uploaded file: either a saved plan file (JSON) or a PDF
+    downloaded from HealthForge, which carries the same data as an attachment.
+    """
+    if raw[:5] == b"%PDF-":
+        return deserialize_plan(_extract_plan_from_pdf(raw))
+    return deserialize_plan(raw)
+
+
+def _extract_plan_from_pdf(raw: bytes) -> bytes:
+    try:
+        attachments = PdfReader(io.BytesIO(raw)).attachments
+    except Exception:
+        raise PlanFileError("That PDF couldn't be read.")
+
+    data = attachments.get(PDF_ATTACHMENT_NAME)
+    if not data:
+        raise PlanFileError(
+            "That PDF doesn't contain HealthForge plan data. PDFs downloaded before this "
+            "feature was added can't be reloaded — download a fresh PDF of your plan."
+        )
+    return data[0]
 
 
 def deserialize_plan(raw: bytes) -> Dict[str, Any]:
