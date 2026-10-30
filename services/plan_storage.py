@@ -51,7 +51,7 @@ def _extract_plan_from_pdf(raw: bytes) -> bytes:
     try:
         attachments = PdfReader(io.BytesIO(raw)).attachments
     except Exception:
-        raise PlanFileError("That PDF couldn't be read.")
+        raise PlanFileError("That PDF couldn't be read.") from None
 
     data = attachments.get(PDF_ATTACHMENT_NAME)
     if not data:
@@ -70,7 +70,7 @@ def deserialize_plan(raw: bytes) -> Dict[str, Any]:
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise PlanFileError("That file isn't valid JSON.")
+        raise PlanFileError("That file isn't valid JSON.") from None
 
     if not isinstance(data, dict) or data.get("format") != SAVE_FORMAT:
         raise PlanFileError("That file isn't a HealthForge plan.")

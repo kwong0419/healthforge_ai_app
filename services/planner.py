@@ -151,7 +151,7 @@ def _apply_meal_swaps(
         new = replacements.get(f"m{m}")
         if new:
             slot = old.get("meal", "Meal") if isinstance(old, dict) else "Meal"
-            meals[m] = {**new, "meal": new.get("meal") or slot}
+            meals[m] = {**new, "meal": slot}  # The slot (e.g. Breakfast) never changes
             changes.append((slot, new["example"]))
 
     grocery = nutrition.setdefault("grocery_list", [])
