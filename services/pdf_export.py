@@ -11,6 +11,7 @@ from fontTools.ttLib import TTFont
 from fpdf import FPDF
 from fpdf.fonts import FontFace
 
+from services.exercise_links import exercise_demo_url
 from services.planner import failed_safety_audit
 from services.plan_storage import PDF_ATTACHMENT_NAME
 
@@ -131,7 +132,14 @@ class PlanPDF(FPDF):
             self.set_xy(self.l_margin, y + row_height + 1)
         self.ln(2)
 
-    def table(self, headings: List[str] | None, rows: List[List[Any]], col_widths: List[int]) -> None:
+    def table(
+        self,
+        headings: List[str] | None,
+        rows: List[List[Any]],
+        col_widths: List[int],
+        links: List[str | None] | None = None,
+    ) -> None:
+        """links, if given, makes each row's first cell a clickable link."""
         if not rows:
             return
         self.set_font(FONT_FAMILY, "", 9)
@@ -150,10 +158,14 @@ class PlanPDF(FPDF):
                 header = table.row()
                 for h in headings:
                     header.cell(h)
-            for values in rows:
+            for r, values in enumerate(rows):
                 row = table.row()
-                for value in values:
-                    row.cell(_clean(value))
+                link = links[r] if links else None
+                for c, value in enumerate(values):
+                    if c == 0 and link:
+                        row.cell(_clean(value), link=link, style=FontFace(color=ACCENT, emphasis="UNDERLINE"))
+                    else:
+                        row.cell(_clean(value))
         self.ln(4)
 
     def callout(self, text: str) -> None:
@@ -258,6 +270,7 @@ def _render_workout(pdf: PlanPDF, workout: Dict[str, Any]) -> None:
         return
 
     pdf.section_title("Workout Plan")
+    pdf.paragraph("Tap an exercise name to watch demo videos of it.", style="I", size=9, color=MUTED)
     for day in days:
         if not isinstance(day, dict):
             pdf.paragraph(day)
@@ -265,13 +278,16 @@ def _render_workout(pdf: PlanPDF, workout: Dict[str, Any]) -> None:
         pdf.subheading(day.get("day") or "Workout", keep_space=40)
         pdf.paragraph(day.get("focus"), style="I", size=9.5, color=MUTED)
 
-        rows = []
+        rows, links = [], []
         for ex in _as_list(day.get("exercises")):
             if isinstance(ex, dict):
-                rows.append([ex.get("name") or "Exercise", ex.get("sets"), ex.get("reps"), ex.get("notes")])
+                name = ex.get("name") or "Exercise"
+                rows.append([name, ex.get("sets"), ex.get("reps"), ex.get("notes")])
+                links.append(exercise_demo_url(name))
             else:
                 rows.append([ex, "", "", ""])
-        pdf.table(["Exercise", "Sets", "Reps", "Notes"], rows, col_widths=[34, 9, 13, 44])
+                links.append(None)
+        pdf.table(["Exercise", "Sets", "Reps", "Notes"], rows, col_widths=[34, 9, 13, 44], links=links)
 
     if workout.get("progression_notes"):
         pdf.subheading("Progression Notes")

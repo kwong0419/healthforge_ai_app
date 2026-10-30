@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 import streamlit as st
 
+from services.exercise_links import exercise_demo_url
 from ui.alerts import show_error_alert
 
 
@@ -251,10 +252,12 @@ def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
                 if not isinstance(ex, dict):
                     st.markdown(f"- {ex}")
                     continue
-                st.checkbox(f"**{ex.get('name', 'Exercise')}**", key=_swap_key(d, e, ex))
+                name = ex.get('name', 'Exercise')
+                st.checkbox(f"**{name}**", key=_swap_key(d, e, ex))
                 st.write(
                     f"  Sets: {ex.get('sets', '')} | Reps: {ex.get('reps', '')}  \n"
-                    f"  Notes: {ex.get('notes', '')}"
+                    f"  Notes: {ex.get('notes', '')}  \n"
+                    f"  [▶️ Watch a demo]({exercise_demo_url(name)})"
                 )
 
     if progression_notes:
