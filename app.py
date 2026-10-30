@@ -1,4 +1,5 @@
 import streamlit as st
+import hashlib
 import json
 import re
 import unicodedata
@@ -17,6 +18,7 @@ from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, load_plan_file, PlanFileError
 from services.pdf_export import build_plan_pdf
 from ui.alerts import show_error_alert
+from ui.browser_storage import read_item, write_item, remove_item
 from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids
 
 
@@ -30,6 +32,7 @@ def init_session_state() -> None:
         "extracted_macros": None,
         "macro_logged_meal": None,
         "loaded_plan_file_id": None,
+        "browser_storage_checked": False,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -59,14 +62,71 @@ def render_load_plan(location: str) -> None:
         st.error(f"**Couldn't load that plan.** {e}", icon="🚨")
         return
 
+    restore_plan(saved, "📂 Saved plan loaded.")
+
+
+def restore_plan(saved: dict, message: str) -> None:
+    """
+    Makes a saved plan (from load_plan_file) the current one, then redraws the page so
+    the profile form shows the saved profile and the uploader moves to the sidebar.
+    """
     st.session_state.plan = saved["plan"]
     st.session_state.profile = saved["profile"]
     st.session_state.meal_log = saved["meal_log"]
     st.session_state.chat_history = saved["chat_history"]
     st.session_state.extracted_macros = None
     set_profile_form_values(saved["profile"])
-    st.session_state.flash_message = "📂 Saved plan loaded."
-    st.rerun()  # Redraw so the uploader moves from the main page to the sidebar
+    st.session_state.flash_message = message
+    st.rerun()
+
+
+def start_over() -> None:
+    """Clears the current plan; sync_browser_storage then forgets it on this device too."""
+    st.session_state.plan = None
+    st.session_state.profile = None
+    st.session_state.meal_log = []
+    st.session_state.chat_history = []
+    st.session_state.extracted_macros = None
+    set_profile_form_values({})
+    st.rerun()
+
+
+BROWSER_STORAGE_NAME = "healthforge-plan"
+
+
+def sync_browser_storage() -> None:
+    """
+    Keeps the current plan in the visitor's browser so it's still there when they come
+    back on the same device. On a new visit, the stored plan is restored first; after
+    that, every change to the plan is written back (or removed after Start Over).
+    """
+    if not st.session_state.browser_storage_checked:
+        stored = read_item(BROWSER_STORAGE_NAME, key="browser_storage_read")
+        if stored is None:
+            return  # The browser answers on the next rerun
+        st.session_state.browser_storage_checked = True
+        # A plan made or uploaded before the browser answered takes priority.
+        if stored and not st.session_state.plan:
+            try:
+                saved = load_plan_file(stored.encode("utf-8"))
+            except PlanFileError:
+                pass  # Unreadable (e.g. from an older version); it's replaced on next save
+            else:
+                restore_plan(saved, "👋 Welcome back! Your last plan was restored from this device.")
+
+    if not st.session_state.plan:
+        remove_item(BROWSER_STORAGE_NAME, key="browser_storage_remove")
+        return
+
+    state = (
+        st.session_state.profile,
+        st.session_state.plan,
+        st.session_state.meal_log,
+        st.session_state.chat_history,
+    )
+    # serialize_plan stamps the current time, so detect changes from the content instead.
+    digest = hashlib.sha256(json.dumps(state, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    write_item(BROWSER_STORAGE_NAME, serialize_plan(*state), key=f"browser_storage_write_{digest}")
 
 
 def apply_feedback(feedback: str) -> None:
@@ -217,6 +277,10 @@ def main() -> None:
         if st.session_state.plan:
             st.markdown("---")
             render_load_plan("sidebar")
+            st.markdown("---")
+            st.caption("Your plan is remembered on this device, so it's here when you come back.")
+            if st.button("🗑️ Start Over", help="Clear this plan from the page and from this device."):
+                start_over()
 
     if not st.session_state.plan:
         with st.container(border=True):
@@ -324,7 +388,9 @@ def main() -> None:
         st.subheader("Coach Feedback")
         st.write("Tell your AI Coach what you'd like to change (e.g., 'Deadlifts were too heavy', 'I don't eat broccoli').")
         
-        feedback = st.chat_input("Enter your feedback here...")
+        # Inside a column the box sits inline under this section. Pinned to the bottom of
+        # the page (the default), it makes Streamlit keep scrolling to the bottom like a chat app.
+        feedback = st.columns(1)[0].chat_input("Enter your feedback here...")
         if feedback:
             with st.spinner("Updating your plan..."):
                 try:
@@ -333,6 +399,9 @@ def main() -> None:
                     st.rerun()
                 except Exception as e:
                     show_error_alert("update your plan with your feedback", e)
+
+    # Last, so it saves the plan as it is after everything above has run.
+    sync_browser_storage()
 
 
 if __name__ == "__main__":
