@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import json
 import logging
 import re
@@ -8,7 +8,7 @@ from groq import Groq, BadRequestError
 from config import GROQ_API_KEY, LLM_MODEL_NAME, LLM_FALLBACK_MODEL_NAME
 from prompts.system_prompt import SYSTEM_PROMPT
 from prompts.auditor_prompt import AUDITOR_PROMPT
-from prompts.swap_prompt import SWAP_PROMPT
+from prompts.swap_prompt import SWAP_PROMPT, MEAL_SWAP_PROMPT
 
 # GPT-OSS is a reasoning model: its hidden reasoning counts toward max_tokens, and if
 # the budget runs out mid-reasoning Groq returns an empty answer and rejects it as
@@ -235,6 +235,53 @@ class HealthForgeLLMClient:
             for r in parsed.get("replacements", [])
             if isinstance(r, dict) and r.get("id") in swap_ids and r.get("name")
         }
+
+    def suggest_meal_swaps(
+        self,
+        profile: Dict[str, Any],
+        plan: Dict[str, Any],
+        swap_ids: List[str],
+        extra_instructions: str = "",
+    ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+        """
+        Asks for replacements for specific meals only, identified as "m<meal>" (e.g. "m0"
+        is the first meal of the day). Returns ({id: new meal}, new grocery items).
+        """
+        nutrition = plan.get("nutrition_plan", {})
+        overview = []
+        for m, meal in enumerate(nutrition.get("daily_structure", [])):
+            meal_id = f"m{m}"
+            marker = "  <-- REPLACE" if meal_id in swap_ids else ""
+            details = f"{meal.get('meal')}: {meal.get('example')}" if isinstance(meal, dict) else str(meal)
+            overview.append(f"  [{meal_id}] {details}{marker}")
+
+        content = (
+            f"{self._profile_summary(profile)}\n"
+            "Current daily meal structure:\n" + "\n".join(overview) + "\n\n"
+            f"Current grocery list: {', '.join(map(str, nutrition.get('grocery_list', []))) or 'none'}\n\n"
+            f"Replace exactly these meals: {', '.join(swap_ids)}."
+        )
+        if extra_instructions:
+            content += f"\n\n{extra_instructions}"
+
+        content = self._complete(
+            messages=[
+                {"role": "system", "content": MEAL_SWAP_PROMPT},
+                {"role": "user", "content": content},
+            ],
+            temperature=0.6,  # Higher than plan writing, so swaps feel genuinely new
+            max_tokens=SWAP_MAX_TOKENS,
+            response_format={"type": "json_object"},
+        )
+
+        parsed = json.loads(self._clean_json_response(content))
+        replacements = {
+            r["id"]: {key: r.get(key, "") for key in ("meal", "example", "notes")}
+            for r in parsed.get("replacements", [])
+            if isinstance(r, dict) and r.get("id") in swap_ids and r.get("example")
+        }
+        additions = [str(item) for item in parsed.get("grocery_additions", []) if item]
+        return replacements, additions
 
     def _build_user_prompt(self, profile: Dict[str, Any]) -> str:
         """

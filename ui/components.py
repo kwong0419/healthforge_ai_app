@@ -229,6 +229,22 @@ def selected_swap_ids(plan: Dict[str, Any]) -> List[str]:
     return selected
 
 
+def _meal_swap_key(meal_index: int, meal: Dict[str, Any]) -> str:
+    # Includes the meal so a swapped-in one starts unticked.
+    return f"meal_swap_pick_{meal_index}_{meal.get('example', '')}"
+
+
+def selected_meal_swap_ids(plan: Dict[str, Any]) -> List[str]:
+    """
+    Meals ticked for swapping in the Nutrition tab, as "m<meal>" ids.
+    """
+    meals = plan.get("nutrition_plan", {}).get("daily_structure", [])
+    return [
+        f"m{m}" for m, meal in enumerate(meals)
+        if isinstance(meal, dict) and st.session_state.get(_meal_swap_key(m, meal))
+    ]
+
+
 def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
     weekly_split = workout_plan.get("weekly_split", [])
     progression_notes = workout_plan.get("progression_notes", "")
@@ -239,7 +255,7 @@ def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
 
     st.caption(
         "☑️ Tick any exercises you'd like to replace, then click "
-        "**Swap Selected Exercises** below the plan."
+        "**Swap Selected** below the plan."
     )
 
     for d, day in enumerate(weekly_split):
@@ -276,8 +292,15 @@ def _render_nutrition_tab(nutrition_plan: Dict[str, Any]) -> None:
 
     if daily_structure:
         st.markdown("### Daily Meal Structure")
-        for meal in daily_structure:
-            st.markdown(f"**{meal.get('meal', 'Meal')}**")
+        st.caption(
+            "☑️ Tick any meals you'd like to replace, then click "
+            "**Swap Selected** below the plan."
+        )
+        for m, meal in enumerate(daily_structure):
+            if not isinstance(meal, dict):
+                st.markdown(f"- {meal}")
+                continue
+            st.checkbox(f"**{meal.get('meal', 'Meal')}**", key=_meal_swap_key(m, meal))
             st.write(f"- Example: {meal.get('example', '')}")
             st.write(f"- Notes: {meal.get('notes', '')}")
 

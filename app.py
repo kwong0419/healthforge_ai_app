@@ -3,6 +3,7 @@ import json
 import re
 import unicodedata
 from datetime import datetime
+from typing import List
 
 # Must be the very first Streamlit command
 st.set_page_config(
@@ -16,7 +17,7 @@ from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, load_plan_file, PlanFileError
 from services.pdf_export import build_plan_pdf
 from ui.alerts import show_error_alert
-from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids
+from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids
 
 
 def init_session_state() -> None:
@@ -104,6 +105,11 @@ def plan_file_stem(profile: dict | None) -> str:
     return "-".join(p for p in ["healthforge-plan", slug, f"{datetime.now():%Y-%m-%d}"] if p)
 
 
+def _count_label(count: int, noun: str) -> List[str]:
+    """E.g. ["2 exercises"], or [] for none."""
+    return [f"{count} {noun}{'' if count == 1 else 's'}"] if count else []
+
+
 def render_plan_actions() -> None:
     """
     Download or save the current plan, or ask for a new take on it.
@@ -154,14 +160,15 @@ def render_plan_actions() -> None:
             use_container_width=True,
         )
 
-    swap_ids = selected_swap_ids(st.session_state.plan)
+    exercise_ids = selected_swap_ids(st.session_state.plan)
+    meal_ids = selected_meal_swap_ids(st.session_state.plan)
+    picked = _count_label(len(exercise_ids), "exercise") + _count_label(len(meal_ids), "meal")
     with col4:
         swap = st.button(
-            f"🔄 Swap {len(swap_ids)} Selected Exercise{'' if len(swap_ids) == 1 else 's'}"
-            if swap_ids else "🔄 Swap Selected Exercises",
-            help="Replace only the exercises you ticked; everything else stays the same."
-            if swap_ids else "Tick exercises in the Workout Plan tab to choose which ones to swap.",
-            disabled=not swap_ids,
+            "🔄 Swap Selected" + (f" ({', '.join(picked)})" if picked else ""),
+            help="Replace only the exercises and meals you ticked; everything else stays the same."
+            if picked else "Tick exercises (Workout Plan tab) or meals (Nutrition tab) to choose what to swap.",
+            disabled=not picked,
             use_container_width=True,
         )
 
@@ -177,18 +184,18 @@ def render_plan_actions() -> None:
                 show_error_alert("generate a different version of your plan", e)
 
     if swap:
-        with st.spinner(f"Finding replacements for {len(swap_ids)} exercise{'' if len(swap_ids) == 1 else 's'}..."):
+        with st.spinner(f"Finding replacements for {' and '.join(picked)}..."):
             try:
                 planner = HealthForgePlanner()
-                st.session_state.plan, changes = planner.swap_exercises(
-                    st.session_state.profile, st.session_state.plan, swap_ids
+                st.session_state.plan, changes = planner.swap_selected(
+                    st.session_state.profile, st.session_state.plan, exercise_ids, meal_ids
                 )
                 st.session_state.flash_message = "🔄 Swapped: " + "; ".join(
                     f"{old} → **{new}**" for old, new in changes
                 )
                 st.rerun()
             except Exception as e:
-                show_error_alert("swap the selected exercises", e)
+                show_error_alert("swap the selected items", e)
 
 
 def main() -> None:

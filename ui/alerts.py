@@ -43,7 +43,7 @@ def describe_error(error: Exception) -> Tuple[str, str]:
         )
     if isinstance(error, ValueError) and str(error).startswith("The AI coach didn't suggest replacements"):
         return (
-            "The AI coach couldn't find replacements for every exercise you picked.",
+            "The AI coach couldn't find replacements for everything you picked.",
             "Please try again. Nothing in your plan was changed.",
         )
     if isinstance(error, ValueError) and "API_KEY is not set" in str(error):

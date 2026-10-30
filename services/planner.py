@@ -76,23 +76,37 @@ class HealthForgePlanner:
         # If we exhausted retries, append a safety warning
         return _set_audit_warning(plan, reason)
 
-    def swap_exercises(
-        self, user_profile: Dict[str, Any], plan: Dict[str, Any], swap_ids: List[str], max_retries: int = 2
+    def swap_selected(
+        self,
+        user_profile: Dict[str, Any],
+        plan: Dict[str, Any],
+        exercise_ids: List[str],
+        meal_ids: List[str],
+        max_retries: int = 2,
     ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
         """
-        Replaces only the chosen exercises ("d<day>e<exercise>" ids); every other part of
-        the plan is kept exactly as it was. Includes the same Safety Audit loop as other
-        updates. Returns the new plan and a list of (old name, new name) pairs.
+        Replaces only the chosen exercises ("d<day>e<exercise>" ids) and meals ("m<meal>"
+        ids); every other part of the plan is kept exactly as it was. Both kinds are checked
+        by one Safety Audit, with the same retry loop as other updates. Returns the new plan
+        and a list of (old, new) pairs.
         """
         extra_instructions = ""
         reason = None
         for attempt in range(max_retries + 1):
-            replacements = self.llm_client.suggest_exercise_swaps(user_profile, plan, swap_ids, extra_instructions)
-            missing = [i for i in swap_ids if i not in replacements]
+            exercises = (
+                self.llm_client.suggest_exercise_swaps(user_profile, plan, exercise_ids, extra_instructions)
+                if exercise_ids else {}
+            )
+            meals, grocery_additions = (
+                self.llm_client.suggest_meal_swaps(user_profile, plan, meal_ids, extra_instructions)
+                if meal_ids else ({}, [])
+            )
+            missing = [i for i in exercise_ids if i not in exercises] + [i for i in meal_ids if i not in meals]
             if missing:
                 raise ValueError(f"The AI coach didn't suggest replacements for: {', '.join(missing)}")
 
-            new_plan, changes = _apply_swaps(plan, replacements)
+            new_plan, changes = _apply_swaps(plan, exercises)
+            changes += _apply_meal_swaps(new_plan, meals, grocery_additions)
             if attempt == max_retries:
                 break
 
@@ -124,3 +138,26 @@ def _apply_swaps(
                 exercises[e] = new
     return new_plan, changes
 
+
+
+def _apply_meal_swaps(
+    plan: Dict[str, Any], replacements: Dict[str, Dict[str, Any]], grocery_additions: List[str]
+) -> List[Tuple[str, str]]:
+    """Merges meal replacements and new grocery items into plan (already a copy)."""
+    nutrition = plan.setdefault("nutrition_plan", {})
+    meals = nutrition.get("daily_structure", [])
+    changes = []
+    for m, old in enumerate(meals):
+        new = replacements.get(f"m{m}")
+        if new:
+            slot = old.get("meal", "Meal") if isinstance(old, dict) else "Meal"
+            meals[m] = {**new, "meal": new.get("meal") or slot}
+            changes.append((slot, new["example"]))
+
+    grocery = nutrition.setdefault("grocery_list", [])
+    have = {str(item).strip().lower() for item in grocery}
+    for item in grocery_additions:
+        if item.strip().lower() not in have:
+            grocery.append(item)
+            have.add(item.strip().lower())
+    return changes
