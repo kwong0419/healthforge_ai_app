@@ -35,17 +35,19 @@ def init_session_state() -> None:
         st.session_state.setdefault(key, value)
 
 
-def render_load_plan() -> None:
+def render_load_plan(location: str) -> None:
     """
-    Sidebar uploader that restores a previously saved plan. Runs before the
+    Uploader that restores a previously saved plan: on the main page when no plan is
+    loaded (the sidebar is hidden on phones), in the sidebar otherwise. Runs before the
     profile form so the form can be prefilled with the saved profile.
     """
-    st.markdown("### Load a Saved Plan")
-    uploaded = st.file_uploader(
-        "Upload a plan PDF or plan file you downloaded from HealthForge",
-        type=["pdf", "json"],
-        key="plan_file_uploader",
-    )
+    if location == "main":
+        st.markdown("### 📂 Already have a plan?")
+        label = "Upload the PDF or plan file you downloaded from HealthForge to pick up where you left off."
+    else:
+        st.markdown("### Load a Saved Plan")
+        label = "Upload a plan PDF or plan file you downloaded from HealthForge"
+    uploaded = st.file_uploader(label, type=["pdf", "json"], key=f"plan_file_uploader_{location}")
     # The uploader keeps its file across reruns, so only load each file once.
     if uploaded is None or uploaded.file_id == st.session_state.loaded_plan_file_id:
         return
@@ -64,6 +66,7 @@ def render_load_plan() -> None:
     st.session_state.extracted_macros = None
     set_profile_form_values(saved["profile"])
     st.session_state.flash_message = "📂 Saved plan loaded."
+    st.rerun()  # Redraw so the uploader moves from the main page to the sidebar
 
 
 def apply_feedback(feedback: str) -> None:
@@ -129,7 +132,7 @@ def render_plan_actions() -> None:
                 file_name=f"{plan_file_stem(st.session_state.profile)}.pdf",
                 mime="application/pdf",
                 help="A clean, printable copy of your plan. You can also upload this PDF "
-                "from the sidebar later to reload your plan.",
+                "to HealthForge later to reload your plan.",
                 type="primary",
                 use_container_width=True,
             )
@@ -149,7 +152,7 @@ def render_plan_actions() -> None:
             # A generic type makes phone browsers download the file instead of opening it
             # as a page (which saves it as .html and breaks reloading).
             mime="application/octet-stream",
-            help="Save this plan to load it back into HealthForge later from the sidebar.",
+            help="Save this plan to load it back into HealthForge later.",
             use_container_width=True,
         )
 
@@ -211,8 +214,13 @@ def main() -> None:
         )
         st.markdown("---")
         st.write("**Note:** This is not medical advice. Always consult a professional for health concerns.")
-        st.markdown("---")
-        render_load_plan()
+        if st.session_state.plan:
+            st.markdown("---")
+            render_load_plan("sidebar")
+
+    if not st.session_state.plan:
+        with st.container(border=True):
+            render_load_plan("main")
 
     profile, submitted = render_user_profile_form()
 
@@ -228,7 +236,7 @@ def main() -> None:
     elif not st.session_state.plan:
         st.info(
             "Fill out your profile and click **Generate Plan** to get started, "
-            "or load a saved plan from the sidebar."
+            "or upload a saved plan above."
         )
 
     if st.session_state.plan:
