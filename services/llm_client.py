@@ -1,9 +1,11 @@
 from typing import Dict, Any, List
 import json
+import logging
 import re
 
+import groq
 from groq import Groq, BadRequestError
-from config import GROQ_API_KEY, LLM_MODEL_NAME
+from config import GROQ_API_KEY, LLM_MODEL_NAME, LLM_FALLBACK_MODEL_NAME
 from prompts.system_prompt import SYSTEM_PROMPT
 from prompts.auditor_prompt import AUDITOR_PROMPT
 from prompts.swap_prompt import SWAP_PROMPT
@@ -20,6 +22,12 @@ SWAP_MAX_TOKENS = 3000      # ~1,500 prompt (exercise names only) + reasoning + 
 # Writing the plan JSON needs little reasoning; the auditor keeps the default effort.
 PLAN_REASONING_EFFORT = "low"
 
+# Errors where the backup model is worth trying: the main model is out of quota,
+# overloaded, or no longer exists. Anything else would fail the same way on both.
+FALLBACK_ERRORS = (groq.RateLimitError, groq.InternalServerError, groq.NotFoundError)
+
+logger = logging.getLogger("healthforge")
+
 
 class HealthForgeLLMClient:
     """
@@ -29,9 +37,23 @@ class HealthForgeLLMClient:
     def __init__(self) -> None:
         if not GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY is not set. Please set it in your environment.")
-        # Extra retries let multi-call flows (generate -> audit -> fix) wait out
-        # per-minute rate limits instead of failing.
-        self.client = Groq(api_key=GROQ_API_KEY, max_retries=5)
+        # A couple of quick retries on the main model, then the backup model gets extra
+        # retries so multi-call flows (generate -> audit -> fix) can wait out per-minute
+        # rate limits instead of failing.
+        self.client = Groq(api_key=GROQ_API_KEY, max_retries=2)
+        self.fallback_client = self.client.with_options(max_retries=5)
+
+    def _complete(self, **kwargs) -> str:
+        """
+        Runs a chat completion on the main model, switching to the backup model if the
+        main one is rate-limited, overloaded, or unavailable. Returns the message content.
+        """
+        try:
+            response = self.client.chat.completions.create(model=LLM_MODEL_NAME, **kwargs)
+        except FALLBACK_ERRORS as e:
+            logger.warning("%s failed (%s); retrying with %s", LLM_MODEL_NAME, type(e).__name__, LLM_FALLBACK_MODEL_NAME)
+            response = self.fallback_client.chat.completions.create(model=LLM_FALLBACK_MODEL_NAME, **kwargs)
+        return response.choices[0].message.content
 
     def generate_plan(self, user_profile: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -39,8 +61,7 @@ class HealthForgeLLMClient:
         """
         user_prompt = self._build_user_prompt(user_profile)
 
-        response = self.client.chat.completions.create(
-            model=LLM_MODEL_NAME,
+        content = self._complete(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -51,7 +72,6 @@ class HealthForgeLLMClient:
             response_format={"type": "json_object"},
         )
 
-        content = response.choices[0].message.content
         cleaned = self._clean_json_response(content)
 
         try:
@@ -83,8 +103,7 @@ class HealthForgeLLMClient:
         # Append the new feedback
         messages.append({"role": "user", "content": new_feedback})
 
-        response = self.client.chat.completions.create(
-            model=LLM_MODEL_NAME,
+        content = self._complete(
             messages=messages,
             temperature=0.4,
             max_tokens=UPDATE_MAX_TOKENS,
@@ -92,7 +111,6 @@ class HealthForgeLLMClient:
             response_format={"type": "json_object"},
         )
 
-        content = response.choices[0].message.content
         cleaned = self._clean_json_response(content)
 
         try:
@@ -116,8 +134,7 @@ class HealthForgeLLMClient:
         audit_content = f"{user_context}\n\nHere is the generated plan to review:\n{plan_json}"
 
         try:
-            response = self.client.chat.completions.create(
-                model=LLM_MODEL_NAME,
+            content = self._complete(
                 messages=[
                     {"role": "system", "content": AUDITOR_PROMPT},
                     {"role": "user", "content": audit_content},
@@ -126,7 +143,6 @@ class HealthForgeLLMClient:
                 max_tokens=AUDIT_MAX_TOKENS,
                 response_format={"type": "json_object"},
             )
-            content = response.choices[0].message.content
             parsed = json.loads(self._clean_json_response(content))
         except BadRequestError as e:
             # Groq rejects output that isn't valid JSON; treat it like a parse failure below
@@ -203,8 +219,7 @@ class HealthForgeLLMClient:
         if extra_instructions:
             content += f"\n\n{extra_instructions}"
 
-        response = self.client.chat.completions.create(
-            model=LLM_MODEL_NAME,
+        content = self._complete(
             messages=[
                 {"role": "system", "content": SWAP_PROMPT},
                 {"role": "user", "content": content},
@@ -214,7 +229,7 @@ class HealthForgeLLMClient:
             response_format={"type": "json_object"},
         )
 
-        parsed = json.loads(self._clean_json_response(response.choices[0].message.content))
+        parsed = json.loads(self._clean_json_response(content))
         return {
             r["id"]: {key: r.get(key, "") for key in ("name", "sets", "reps", "notes")}
             for r in parsed.get("replacements", [])

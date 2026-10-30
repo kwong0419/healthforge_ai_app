@@ -18,6 +18,9 @@ if not GROQ_API_KEY:
 
 # Groq model name – see https://console.groq.com/docs/models for options
 LLM_MODEL_NAME = "openai/gpt-oss-120b"
+# Used when the main model is rate-limited, overloaded, or retired. It accepts the same
+# request options and has its own free-tier limits on Groq.
+LLM_FALLBACK_MODEL_NAME = "openai/gpt-oss-20b"
 
 APP_NAME = "HealthForge AI"
 APP_TAGLINE = "Evidence-based fitness, nutrition, and habit coaching powered by GPT-OSS on Groq."
