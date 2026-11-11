@@ -1,7 +1,10 @@
+import copy
 from typing import Dict, Any, List
+import pandas as pd
 import streamlit as st
 
 from services.exercise_links import exercise_demo_url
+from services.planner import HealthForgePlanner, failed_safety_audit
 from ui.alerts import show_error_alert
 
 
@@ -199,7 +202,7 @@ def render_plan(plan: Dict[str, Any]) -> None:
     )
 
     with tab1:
-        _render_workout_tab(workout_plan)
+        _render_workout_tab(plan, workout_plan)
 
     with tab2:
         _render_nutrition_tab(nutrition_plan)
@@ -244,7 +247,7 @@ def selected_meal_swap_ids(plan: Dict[str, Any]) -> List[str]:
     ]
 
 
-def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
+def _render_workout_tab(plan: Dict[str, Any], workout_plan: Dict[str, Any]) -> None:
     weekly_split = workout_plan.get("weekly_split", [])
     progression_notes = workout_plan.get("progression_notes", "")
 
@@ -252,12 +255,17 @@ def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
         st.info("No workout plan available.")
         return
 
+    _render_safety_check_prompt(plan)
     st.caption(
-        "☑️ Tick any exercises you'd like to replace, then click "
-        "**Swap Selected** below the plan."
+        "✏️ Use **Edit this day** to change exercises yourself, or ☑️ tick exercises and "
+        "click **Swap Selected** below the plan."
     )
 
     for d, day in enumerate(weekly_split):
+        if st.session_state.get("editing_day") == d:
+            _render_day_editor(plan, d, day)
+            continue
+
         st.markdown(f"### {day.get('day', 'Day')}")
         st.write(day.get("focus", ""))
 
@@ -275,9 +283,111 @@ def _render_workout_tab(workout_plan: Dict[str, Any]) -> None:
                     f"  [▶️ Watch a demo]({exercise_demo_url(name)})"
                 )
 
+        if st.button("✏️ Edit this day", key=f"edit_day_{d}"):
+            st.session_state.editing_day = d
+            st.rerun()
+
     if progression_notes:
         st.markdown("#### Progression Notes")
         st.write(progression_notes)
+
+
+_EDITOR_COLUMNS = ["Exercise", "Sets", "Reps", "Notes"]
+
+
+def _render_day_editor(plan: Dict[str, Any], day_index: int, day: Dict[str, Any]) -> None:
+    """
+    Lets the user change one day's focus and exercises directly, with no AI involved.
+    """
+    st.markdown(f"### ✏️ Editing {day.get('day', 'Day')}")
+    focus = st.text_input("Focus", value=day.get("focus", ""), key=f"edit_focus_{day_index}")
+
+    rows = [
+        {"Exercise": ex.get("name", ""), "Sets": str(ex.get("sets", "")), "Reps": str(ex.get("reps", "")),
+         "Notes": ex.get("notes", "")}
+        if isinstance(ex, dict) else {"Exercise": str(ex), "Sets": "", "Reps": "", "Notes": ""}
+        for ex in day.get("exercises", [])
+    ]
+    edited = st.data_editor(
+        pd.DataFrame(rows, columns=_EDITOR_COLUMNS),
+        key=f"edit_table_{day_index}",
+        num_rows="dynamic",
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Exercise": st.column_config.TextColumn(required=True, width="medium"),
+            "Sets": st.column_config.TextColumn(width="small", help="e.g. 3"),
+            "Reps": st.column_config.TextColumn(width="small", help="e.g. 8-12 or 30s"),
+            "Notes": st.column_config.TextColumn(width="large"),
+        },
+    )
+    st.caption("Tap a cell to change it. Add an exercise in the empty row at the bottom; "
+               "to remove one, select its row and press the 🗑️ icon.")
+
+    save_col, cancel_col = st.columns(2)
+    if save_col.button("💾 Save Changes", type="primary", key=f"edit_save_{day_index}", use_container_width=True):
+        exercises = _exercises_from_editor(edited)
+        if not exercises:
+            st.error("Add at least one exercise before saving.", icon="🚨")
+            return
+        new_plan = copy.deepcopy(plan)
+        new_day = new_plan["workout_plan"]["weekly_split"][day_index]
+        new_day["focus"] = focus.strip()
+        new_day["exercises"] = exercises
+        st.session_state.editing_day = None
+        if new_plan != plan:
+            st.session_state.plan = new_plan
+            st.session_state.unchecked_plan = new_plan  # Shows the safety-check prompt
+            st.session_state.flash_message = f"✏️ Saved your changes to {day.get('day', 'this day')}."
+        st.rerun()
+    if cancel_col.button("Cancel", key=f"edit_cancel_{day_index}", use_container_width=True):
+        st.session_state.editing_day = None
+        st.rerun()
+
+
+def _exercises_from_editor(edited: pd.DataFrame) -> List[Dict[str, Any]]:
+    def cell(value: Any) -> str:
+        return "" if value is None or pd.isna(value) else str(value).strip()
+
+    exercises = []
+    for row in edited.to_dict("records"):
+        name = cell(row.get("Exercise"))
+        if not name:
+            continue  # Blank rows are ignored
+        sets = cell(row.get("Sets"))
+        exercises.append({
+            "name": name,
+            "sets": int(sets) if sets.isdigit() else sets,
+            "reps": cell(row.get("Reps")),
+            "notes": cell(row.get("Notes")),
+        })
+    return exercises
+
+
+def _render_safety_check_prompt(plan: Dict[str, Any]) -> None:
+    """
+    After the user edits exercises themselves, offers to run the same Safety Audit that
+    AI-made changes get. Disappears once the plan changes again or is checked.
+    """
+    if st.session_state.get("unchecked_plan") is not plan:
+        return
+    st.info(
+        "You've edited your workouts. Your own edits aren't safety-checked automatically; "
+        "run a check to make sure they still suit your injuries and experience.",
+        icon="🛡️",
+    )
+    if st.button("🛡️ Safety-check my plan", key="safety_check_edits"):
+        with st.spinner("Running the safety check..."):
+            try:
+                checked = HealthForgePlanner().safety_check(st.session_state.profile, copy.deepcopy(plan))
+                st.session_state.plan = checked
+                st.session_state.flash_message = (
+                    "🛡️ The safety check flagged a concern. See the warning above your plan."
+                    if failed_safety_audit(checked) else "🛡️ Your edited plan passed the safety check."
+                )
+                st.rerun()
+            except Exception as e:
+                show_error_alert("safety-check your plan", e)
 
 
 def _render_nutrition_tab(nutrition_plan: Dict[str, Any]) -> None:

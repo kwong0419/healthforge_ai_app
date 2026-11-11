@@ -123,6 +123,17 @@ class HealthForgePlanner:
         return _set_audit_warning(new_plan, reason), changes
 
 
+    def safety_check(self, user_profile: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Runs the Safety Audit on a plan as it stands (e.g. after the user's own edits) and
+        sets or clears its audit warning. Updates and returns the plan it was given.
+        """
+        audit_result = self.llm_client.audit_plan(user_profile, plan)
+        if audit_result.get("status") == "PASSED":
+            return _set_audit_warning(plan, reason=None)
+        return _set_audit_warning(plan, audit_result.get("reason", "Safety audit failed."))
+
+
 def _apply_swaps(
     plan: Dict[str, Any], replacements: Dict[str, Dict[str, Any]]
 ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
