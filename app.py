@@ -19,7 +19,7 @@ from services.plan_storage import serialize_plan, load_plan_file, PlanFileError
 from services.pdf_export import build_plan_pdf
 from ui.alerts import show_error_alert
 from ui.browser_storage import read_item, write_item, remove_item
-from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids
+from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids, clear_swap_selection, render_swap_choices
 
 
 def init_session_state() -> None:
@@ -227,12 +227,19 @@ def render_plan_actions() -> None:
     meal_ids = selected_meal_swap_ids(st.session_state.plan)
     picked = _count_label(len(exercise_ids), "exercise") + _count_label(len(meal_ids), "meal")
     with col4:
-        swap = st.button(
-            "🔄 Swap Selected" + (f" ({', '.join(picked)})" if picked else ""),
-            help="Replace only the exercises and meals you ticked; everything else stays the same."
-            if picked else "Tick exercises (Workout Plan tab) or meals (Nutrition tab) to choose what to swap.",
+        find_options = st.button(
+            "🔄 Find Replacements" + (f" ({', '.join(picked)})" if picked else ""),
+            help="Get a few options for each exercise and meal you ticked, then choose the ones you want."
+            if picked else "Tick exercises (Workout Plan tab) or meals (Nutrition tab) to choose what to replace.",
             disabled=not picked,
             use_container_width=True,
+        )
+    preferences = ""
+    if picked:
+        preferences = st.text_input(
+            "Optional: what should the replacements be like?",
+            placeholder="e.g. dumbbells only, no jumping, more unilateral work, quick to prep",
+            key="swap_preferences",
         )
 
     if regenerate:
@@ -246,19 +253,57 @@ def render_plan_actions() -> None:
             except Exception as e:
                 show_error_alert("generate a different version of your plan", e)
 
-    if swap:
-        with st.spinner(f"Finding replacements for {' and '.join(picked)}..."):
+    if find_options:
+        with st.spinner(f"Finding options for {' and '.join(picked)}..."):
             try:
                 planner = HealthForgePlanner()
-                st.session_state.plan, changes = planner.swap_selected(
-                    st.session_state.profile, st.session_state.plan, exercise_ids, meal_ids
+                options = planner.find_swap_options(
+                    st.session_state.profile, st.session_state.plan, exercise_ids, meal_ids, preferences
                 )
-                st.session_state.flash_message = "🔄 Swapped: " + "; ".join(
-                    f"{old} → **{new}**" for old, new in changes
-                )
+                st.session_state.swap_options = {
+                    "plan": st.session_state.plan,  # Options only apply to the plan they were made for
+                    "options": options,
+                }
+                # A new version gives the choice lists fresh widgets, so old picks don't carry over.
+                st.session_state.swap_options_version = st.session_state.get("swap_options_version", 0) + 1
                 st.rerun()
             except Exception as e:
-                show_error_alert("swap the selected items", e)
+                show_error_alert("find replacement options", e)
+
+    render_pending_swap_choices()
+
+
+def render_pending_swap_choices() -> None:
+    """
+    Shows the replacement options found by Find Replacements and applies the user's picks.
+    """
+    pending = st.session_state.get("swap_options")
+    if not pending or pending["plan"] is not st.session_state.plan:
+        return  # Nothing found yet, or the plan has changed since
+
+    action, choices = render_swap_choices(
+        st.session_state.plan, pending["options"], st.session_state.swap_options_version
+    )
+    if action == "cancel" or (action == "apply" and not choices):
+        st.session_state.swap_options = None
+        st.rerun()
+    if action != "apply":
+        return
+
+    with st.spinner("Applying your choices and running the safety check..."):
+        try:
+            planner = HealthForgePlanner()
+            st.session_state.plan, changes = planner.apply_swap_choices(
+                st.session_state.profile, st.session_state.plan, choices
+            )
+            st.session_state.swap_options = None
+            clear_swap_selection()
+            st.session_state.flash_message = "🔄 Swapped: " + "; ".join(
+                f"{old} → **{new}**" for old, new in changes
+            )
+            st.rerun()
+        except Exception as e:
+            show_error_alert("apply your choices", e)
 
 
 def main() -> None:

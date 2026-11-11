@@ -76,52 +76,45 @@ class HealthForgePlanner:
         # If we exhausted retries, append a safety warning
         return _set_audit_warning(plan, reason)
 
-    def swap_selected(
+    def find_swap_options(
         self,
         user_profile: Dict[str, Any],
         plan: Dict[str, Any],
         exercise_ids: List[str],
         meal_ids: List[str],
-        max_retries: int = 2,
+        preferences: str = "",
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Gets a few replacement choices for each chosen exercise ("d<day>e<exercise>") and
+        meal ("m<meal>"), steered by the user's optional preferences. Returns {id: [options]}.
+        """
+        options = {}
+        if exercise_ids:
+            options.update(self.llm_client.suggest_exercise_options(user_profile, plan, exercise_ids, preferences))
+        if meal_ids:
+            options.update(self.llm_client.suggest_meal_options(user_profile, plan, meal_ids, preferences))
+        missing = [i for i in exercise_ids + meal_ids if i not in options]
+        if missing:
+            raise ValueError(f"The AI coach didn't suggest replacements for: {', '.join(missing)}")
+        return options
+
+    def apply_swap_choices(
+        self, user_profile: Dict[str, Any], plan: Dict[str, Any], choices: Dict[str, Dict[str, Any]]
     ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
         """
-        Replaces only the chosen exercises ("d<day>e<exercise>" ids) and meals ("m<meal>"
-        ids); every other part of the plan is kept exactly as it was. Both kinds are checked
-        by one Safety Audit, with the same retry loop as other updates. Returns the new plan
-        and a list of (old, new) pairs.
+        Puts the options the user picked ({id: option}) into a copy of the plan, then runs the
+        Safety Audit once. The user's picks are kept either way; a failed audit adds the usual
+        warning. Returns the new plan and a list of (old, new) pairs.
         """
-        extra_instructions = ""
-        reason = None
-        for attempt in range(max_retries + 1):
-            exercises = (
-                self.llm_client.suggest_exercise_swaps(user_profile, plan, exercise_ids, extra_instructions)
-                if exercise_ids else {}
-            )
-            meals, grocery_additions = (
-                self.llm_client.suggest_meal_swaps(user_profile, plan, meal_ids, extra_instructions)
-                if meal_ids else ({}, [])
-            )
-            missing = [i for i in exercise_ids if i not in exercises] + [i for i in meal_ids if i not in meals]
-            if missing:
-                raise ValueError(f"The AI coach didn't suggest replacements for: {', '.join(missing)}")
+        exercises = {i: c for i, c in choices.items() if i.startswith("d")}
+        meals = {i: c for i, c in choices.items() if i.startswith("m")}
+        grocery_additions = [item for c in meals.values() for item in c.get("grocery_additions", [])]
 
-            new_plan, changes = _apply_swaps(plan, exercises)
-            changes += _apply_meal_swaps(new_plan, meals, grocery_additions)
-            if attempt == max_retries:
-                break
-
-            audit_result = self.llm_client.audit_plan(user_profile, new_plan)
-            if audit_result.get("status") == "PASSED":
-                return _set_audit_warning(new_plan, reason=None), changes
-
-            reason = audit_result.get("reason", "Safety audit failed.")
-            extra_instructions = (
-                f"A safety auditor rejected your previous choices ({', '.join(new for _, new in changes)}) "
-                f"for this reason: {reason}. Choose safer replacements."
-            )
-
-        return _set_audit_warning(new_plan, reason), changes
-
+        new_plan, changes = _apply_swaps(plan, exercises)
+        changes += _apply_meal_swaps(
+            new_plan, {i: {k: c.get(k, "") for k in ("example", "notes")} for i, c in meals.items()}, grocery_additions
+        )
+        return self.safety_check(user_profile, new_plan), changes
 
     def safety_check(self, user_profile: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
         """

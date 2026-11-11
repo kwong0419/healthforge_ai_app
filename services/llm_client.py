@@ -17,7 +17,8 @@ from prompts.swap_prompt import SWAP_PROMPT, MEAL_SWAP_PROMPT
 GENERATE_MAX_TOKENS = 5000  # ~900 prompt + ~2,800 plan
 UPDATE_MAX_TOKENS = 4000    # ~3,700 prompt (includes current plan) + ~2,800 plan
 AUDIT_MAX_TOKENS = 3000     # ~3,500 prompt (includes plan) + ~1,000 reasoning/verdict
-SWAP_MAX_TOKENS = 3000      # ~1,500 prompt (exercise names only) + reasoning + a few exercises
+SWAP_MAX_TOKENS = 4000      # ~1,500 prompt (exercise names only) + reasoning + 3 options per item
+SWAP_OPTIONS = 3            # Replacement choices offered for each exercise or meal
 
 # Writing the plan JSON needs little reasoning; the auditor keeps the default effort.
 PLAN_REASONING_EFFORT = "low"
@@ -190,17 +191,17 @@ class HealthForgeLLMClient:
         content = re.sub(r"\n?```\s*$", "", content)
         return content.strip()
 
-    def suggest_exercise_swaps(
+    def suggest_exercise_options(
         self,
         profile: Dict[str, Any],
         plan: Dict[str, Any],
         swap_ids: List[str],
-        extra_instructions: str = "",
-    ) -> Dict[str, Dict[str, Any]]:
+        preferences: str = "",
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Asks for replacements for specific exercises only, identified as "d<day>e<exercise>"
-        (e.g. "d0e2" is the third exercise on the first day). Returns {id: new exercise}.
-        Only exercise names are sent for context, so this stays small and fast.
+        Asks for up to SWAP_OPTIONS replacement choices for specific exercises, identified as
+        "d<day>e<exercise>" (e.g. "d0e2" is the third exercise on the first day).
+        Returns {id: [options]}. Only exercise names are sent for context, so this stays small.
         """
         overview = []
         for d, day in enumerate(plan.get("workout_plan", {}).get("weekly_split", [])):
@@ -214,38 +215,23 @@ class HealthForgeLLMClient:
         content = (
             f"{self._profile_summary(profile)}\n"
             "Current workout plan:\n" + "\n".join(overview) + "\n\n"
-            f"Replace exactly these exercises: {', '.join(swap_ids)}."
+            f"Give options for exactly these exercises: {', '.join(swap_ids)}."
+            + self._preferences_note(preferences)
         )
-        if extra_instructions:
-            content += f"\n\n{extra_instructions}"
+        parsed = self._ask_for_options(SWAP_PROMPT, content)
+        return self._collect_options(parsed, swap_ids, ("name", "sets", "reps", "notes"), required="name")
 
-        content = self._complete(
-            messages=[
-                {"role": "system", "content": SWAP_PROMPT},
-                {"role": "user", "content": content},
-            ],
-            temperature=0.6,  # Higher than plan writing, so swaps feel genuinely new
-            max_tokens=SWAP_MAX_TOKENS,
-            response_format={"type": "json_object"},
-        )
-
-        parsed = json.loads(self._clean_json_response(content))
-        return {
-            r["id"]: {key: r.get(key, "") for key in ("name", "sets", "reps", "notes")}
-            for r in parsed.get("replacements", [])
-            if isinstance(r, dict) and r.get("id") in swap_ids and r.get("name")
-        }
-
-    def suggest_meal_swaps(
+    def suggest_meal_options(
         self,
         profile: Dict[str, Any],
         plan: Dict[str, Any],
         swap_ids: List[str],
-        extra_instructions: str = "",
-    ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+        preferences: str = "",
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Asks for replacements for specific meals only, identified as "m<meal>" (e.g. "m0"
-        is the first meal of the day). Returns ({id: new meal}, new grocery items).
+        Asks for up to SWAP_OPTIONS replacement choices for specific meals, identified as
+        "m<meal>" (e.g. "m0" is the first meal of the day). Returns {id: [options]}; each
+        option lists the new ingredients it needs in "grocery_additions".
         """
         nutrition = plan.get("nutrition_plan", {})
         overview = []
@@ -259,29 +245,50 @@ class HealthForgeLLMClient:
             f"{self._profile_summary(profile)}\n"
             "Current daily meal structure:\n" + "\n".join(overview) + "\n\n"
             f"Current grocery list: {', '.join(map(str, nutrition.get('grocery_list', []))) or 'none'}\n\n"
-            f"Replace exactly these meals: {', '.join(swap_ids)}."
+            f"Give options for exactly these meals: {', '.join(swap_ids)}."
+            + self._preferences_note(preferences)
         )
-        if extra_instructions:
-            content += f"\n\n{extra_instructions}"
+        parsed = self._ask_for_options(MEAL_SWAP_PROMPT, content)
+        options = self._collect_options(parsed, swap_ids, ("example", "notes", "grocery_additions"), required="example")
+        for choices in options.values():
+            for option in choices:
+                additions = option.get("grocery_additions")
+                option["grocery_additions"] = [str(i) for i in additions if i] if isinstance(additions, list) else []
+        return options
 
+    @staticmethod
+    def _preferences_note(preferences: str) -> str:
+        preferences = preferences.strip()
+        return f"\n\nThe user's preferences for the replacements: {preferences}" if preferences else ""
+
+    def _ask_for_options(self, system_prompt: str, content: str) -> Dict[str, Any]:
         content = self._complete(
             messages=[
-                {"role": "system", "content": MEAL_SWAP_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content},
             ],
-            temperature=0.6,  # Higher than plan writing, so swaps feel genuinely new
+            temperature=0.6,  # Higher than plan writing, so options feel genuinely different
             max_tokens=SWAP_MAX_TOKENS,
             response_format={"type": "json_object"},
         )
+        return json.loads(self._clean_json_response(content))
 
-        parsed = json.loads(self._clean_json_response(content))
-        replacements = {
-            r["id"]: {key: r.get(key, "") for key in ("meal", "example", "notes")}
-            for r in parsed.get("replacements", [])
-            if isinstance(r, dict) and r.get("id") in swap_ids and r.get("example")
-        }
-        additions = [str(item) for item in parsed.get("grocery_additions", []) if item]
-        return replacements, additions
+    @staticmethod
+    def _collect_options(
+        parsed: Dict[str, Any], swap_ids: List[str], fields: Tuple[str, ...], required: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Keeps well-formed options for the requested ids only, at most SWAP_OPTIONS each."""
+        collected = {}
+        for r in parsed.get("replacements", []):
+            if not isinstance(r, dict) or r.get("id") not in swap_ids or r["id"] in collected:
+                continue
+            options = [
+                {key: o.get(key, "") for key in fields}
+                for o in r.get("options", []) if isinstance(o, dict) and o.get(required)
+            ][:SWAP_OPTIONS]
+            if options:
+                collected[r["id"]] = options
+        return collected
 
     def _build_user_prompt(self, profile: Dict[str, Any]) -> str:
         """

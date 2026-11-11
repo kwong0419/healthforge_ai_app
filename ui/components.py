@@ -1,5 +1,5 @@
 import copy
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import pandas as pd
 import streamlit as st
 
@@ -215,8 +215,15 @@ def render_plan(plan: Dict[str, Any]) -> None:
 
 
 def _swap_key(day_index: int, exercise_index: int, exercise: Dict[str, Any]) -> str:
-    # Includes the name so a swapped-in exercise starts unticked.
-    return f"swap_pick_{day_index}_{exercise_index}_{exercise.get('name', '')}"
+    # Includes the name so a swapped-in exercise starts unticked, and a version that
+    # clear_swap_selection bumps to untick everything.
+    version = st.session_state.get("swap_tick_version", 0)
+    return f"swap_pick_{day_index}_{exercise_index}_{exercise.get('name', '')}_v{version}"
+
+
+def clear_swap_selection() -> None:
+    """Unticks every exercise and meal on the next run."""
+    st.session_state.swap_tick_version = st.session_state.get("swap_tick_version", 0) + 1
 
 
 def selected_swap_ids(plan: Dict[str, Any]) -> List[str]:
@@ -232,8 +239,9 @@ def selected_swap_ids(plan: Dict[str, Any]) -> List[str]:
 
 
 def _meal_swap_key(meal_index: int, meal: Dict[str, Any]) -> str:
-    # Includes the meal so a swapped-in one starts unticked.
-    return f"meal_swap_pick_{meal_index}_{meal.get('example', '')}"
+    # Includes the meal so a swapped-in one starts unticked (see also _swap_key).
+    version = st.session_state.get("swap_tick_version", 0)
+    return f"meal_swap_pick_{meal_index}_{meal.get('example', '')}_v{version}"
 
 
 def selected_meal_swap_ids(plan: Dict[str, Any]) -> List[str]:
@@ -258,7 +266,7 @@ def _render_workout_tab(plan: Dict[str, Any], workout_plan: Dict[str, Any]) -> N
     _render_safety_check_prompt(plan)
     st.caption(
         "✏️ Use **Edit this day** to change exercises yourself, or ☑️ tick exercises and "
-        "click **Swap Selected** below the plan."
+        "click **Find Replacements** below the plan to choose from suggestions."
     )
 
     for d, day in enumerate(weekly_split):
@@ -390,6 +398,61 @@ def _render_safety_check_prompt(plan: Dict[str, Any]) -> None:
                 show_error_alert("safety-check your plan", e)
 
 
+def describe_swap_item(plan: Dict[str, Any], item_id: str) -> str:
+    """What an exercise ("d0e1") or meal ("m1") id currently is, e.g. "Goblet Squat"."""
+    try:
+        if item_id.startswith("d"):
+            d, e = map(int, item_id[1:].split("e"))
+            ex = plan["workout_plan"]["weekly_split"][d]["exercises"][e]
+            return ex.get("name", "Exercise") if isinstance(ex, dict) else str(ex)
+        meal = plan["nutrition_plan"]["daily_structure"][int(item_id[1:])]
+        return f"{meal.get('meal', 'Meal')}: {meal.get('example', '')}" if isinstance(meal, dict) else str(meal)
+    except (KeyError, IndexError, ValueError):
+        return item_id
+
+
+def render_swap_choices(
+    plan: Dict[str, Any], options: Dict[str, List[Dict[str, Any]]], version: int
+) -> Tuple[str | None, Dict[str, Dict[str, Any]]]:
+    """
+    Shows the replacement options for each item. Returns ("apply", {id: chosen option}),
+    ("cancel", {}), or (None, {}) while the user is still choosing.
+    """
+    choices = {}
+    with st.container(border=True):
+        st.markdown("### 🔄 Choose Your Replacements")
+        for item_id, item_options in options.items():
+            current = describe_swap_item(plan, item_id)
+            if item_id.startswith("d"):
+                labels = [f"**{o['name']}** · {o.get('sets', '')} × {o.get('reps', '')}" for o in item_options]
+                captions = [o.get("notes", "") for o in item_options]
+            else:
+                labels = [f"**{o['example']}**" for o in item_options]
+                captions = [
+                    o.get("notes", "") + (f" Adds to grocery list: {', '.join(o['grocery_additions'])}."
+                                          if o.get("grocery_additions") else "")
+                    for o in item_options
+                ]
+            labels.append("Keep it as is")
+            captions.append("")
+            pick = st.radio(
+                f"Replace **{current}** with:",
+                range(len(labels)),
+                format_func=lambda i, labels=labels: labels[i],
+                captions=captions,
+                key=f"swap_choice_{item_id}_v{version}",
+            )
+            if pick < len(item_options):
+                choices[item_id] = item_options[pick]
+
+        apply_col, cancel_col = st.columns(2)
+        if apply_col.button("✅ Apply My Choices", type="primary", key="swap_apply", use_container_width=True):
+            return "apply", choices
+        if cancel_col.button("Cancel", key="swap_cancel", use_container_width=True):
+            return "cancel", {}
+    return None, {}
+
+
 def _render_nutrition_tab(nutrition_plan: Dict[str, Any]) -> None:
     philosophy = nutrition_plan.get("philosophy", "")
     daily_structure = nutrition_plan.get("daily_structure", [])
@@ -403,7 +466,7 @@ def _render_nutrition_tab(nutrition_plan: Dict[str, Any]) -> None:
         st.markdown("### Daily Meal Structure")
         st.caption(
             "☑️ Tick any meals you'd like to replace, then click "
-            "**Swap Selected** below the plan."
+            "**Find Replacements** below the plan to choose from suggestions."
         )
         for m, meal in enumerate(daily_structure):
             if not isinstance(meal, dict):
