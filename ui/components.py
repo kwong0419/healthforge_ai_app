@@ -1,4 +1,5 @@
 import copy
+import html
 from typing import Dict, Any, List, Tuple
 import streamlit as st
 
@@ -194,6 +195,7 @@ def render_plan(plan: Dict[str, Any]) -> None:
     disclaimers = plan.get("disclaimers", [])
 
     st.subheader("Overview")
+    _render_profile_chips(st.session_state.get("profile") or {})
     st.write(summary)
 
     tab1, tab2, tab3, tab4 = st.tabs(
@@ -213,16 +215,60 @@ def render_plan(plan: Dict[str, Any]) -> None:
         _render_disclaimers_tab(disclaimers)
 
 
-def _swap_key(day_index: int, exercise_index: int, exercise: Dict[str, Any]) -> str:
-    # Includes the name so a swapped-in exercise starts unticked, and a version that
+def _chips(texts: List[str]) -> str:
+    return "".join(f'<span class="hf-chip">{html.escape(t)}</span>' for t in texts if t)
+
+
+def _render_profile_chips(profile: Dict[str, Any]) -> None:
+    days = profile.get("days_per_week")
+    chips = _chips([
+        f"🗓️ {days} days a week" if days else "",
+        f"⏱️ {profile['session_length']}" if profile.get("session_length") else "",
+        f"🎯 {profile['primary_goal']}" if profile.get("primary_goal") else "",
+        f"💪 {profile['experience_level']}" if profile.get("experience_level") else "",
+    ])
+    if chips:
+        st.markdown(f'<div class="hf-chips">{chips}</div>', unsafe_allow_html=True)
+
+
+# ---------- Choosing items to swap ----------
+# Ticked items are kept in st.session_state.swap_picks ({id: name}) rather than only in
+# the checkboxes, because a checkbox forgets its tick while its day isn't on screen.
+
+def _picks() -> Dict[str, str]:
+    return st.session_state.setdefault("swap_picks", {})
+
+
+def _pick_key(item_id: str, name: str) -> str:
+    # Includes the name so a swapped-in item starts unticked, and a version that
     # clear_swap_selection bumps to untick everything.
     version = st.session_state.get("swap_tick_version", 0)
-    return f"swap_pick_{day_index}_{exercise_index}_{exercise.get('name', '')}_v{version}"
+    return f"swap_pick_{item_id}_{name}_v{version}"
+
+
+def _sync_pick(item_id: str, name: str, key: str) -> None:
+    if st.session_state.get(key):
+        _picks()[item_id] = name
+    else:
+        _picks().pop(item_id, None)
+
+
+def _render_pick_box(item_id: str, name: str, label: str) -> None:
+    key = _pick_key(item_id, name)
+    st.checkbox(label, key=key, value=_picks().get(item_id) == name,
+                on_change=_sync_pick, args=(item_id, name, key))
+
+
+def _drop_picks(prefix: str) -> None:
+    """Unticks every item whose id starts with prefix ("d" exercises, "m" meals)."""
+    for item_id in [i for i in _picks() if i.startswith(prefix)]:
+        del _picks()[item_id]
+    st.session_state.swap_tick_version = st.session_state.get("swap_tick_version", 0) + 1
 
 
 def clear_swap_selection() -> None:
-    """Unticks every exercise and meal on the next run."""
-    st.session_state.swap_tick_version = st.session_state.get("swap_tick_version", 0) + 1
+    """Unticks every exercise and meal."""
+    _drop_picks("")
 
 
 def selected_swap_ids(plan: Dict[str, Any]) -> List[str]:
@@ -232,15 +278,9 @@ def selected_swap_ids(plan: Dict[str, Any]) -> List[str]:
     selected = []
     for d, day in enumerate(plan.get("workout_plan", {}).get("weekly_split", [])):
         for e, ex in enumerate(day.get("exercises", [])):
-            if isinstance(ex, dict) and st.session_state.get(_swap_key(d, e, ex)):
+            if isinstance(ex, dict) and _picks().get(f"d{d}e{e}") == ex.get("name", ""):
                 selected.append(f"d{d}e{e}")
     return selected
-
-
-def _meal_swap_key(meal_index: int, meal: Dict[str, Any]) -> str:
-    # Includes the meal so a swapped-in one starts unticked (see also _swap_key).
-    version = st.session_state.get("swap_tick_version", 0)
-    return f"meal_swap_pick_{meal_index}_{meal.get('example', '')}_v{version}"
 
 
 def selected_meal_swap_ids(plan: Dict[str, Any]) -> List[str]:
@@ -250,8 +290,31 @@ def selected_meal_swap_ids(plan: Dict[str, Any]) -> List[str]:
     meals = plan.get("nutrition_plan", {}).get("daily_structure", [])
     return [
         f"m{m}" for m, meal in enumerate(meals)
-        if isinstance(meal, dict) and st.session_state.get(_meal_swap_key(m, meal))
+        if isinstance(meal, dict) and _picks().get(f"m{m}") == meal.get("example", "")
     ]
+
+
+def _on_swap_toggle(key: str, prefix: str) -> None:
+    if not st.session_state.get(key):
+        _drop_picks(prefix)  # Turning swap mode off unticks that tab's items
+
+
+def _render_swap_toggle(label: str, key: str, prefix: str) -> bool:
+    return st.toggle(label, key=key, on_change=_on_swap_toggle, args=(key, prefix))
+
+
+# ---------- Workouts ----------
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _day_label(day: Dict[str, Any], index: int) -> str:
+    """A short name for the day picker, e.g. "Mon", or "Day 2" if no weekday is given."""
+    text = str(day.get("day", "")).lower()
+    for weekday in _WEEKDAYS:
+        if weekday.lower() in text:
+            return weekday[:3]
+    return f"Day {index + 1}"
 
 
 def _render_workout_tab(plan: Dict[str, Any], workout_plan: Dict[str, Any]) -> None:
@@ -263,57 +326,75 @@ def _render_workout_tab(plan: Dict[str, Any], workout_plan: Dict[str, Any]) -> N
         return
 
     _render_safety_check_prompt(plan)
-    st.caption(
-        "✏️ Use **Edit this day** to change exercises yourself, or ☑️ tick exercises and "
-        "click **Find Replacements** below the plan to choose from suggestions."
-    )
 
-    for d, day in enumerate(weekly_split):
-        if st.session_state.get("editing_day") == d:
-            _render_day_editor(plan, d, day)
-            continue
+    with st.container(key="hf_inline_workout_bar"):
+        days_col, swap_col = st.columns([2, 1], vertical_alignment="center")
+        with days_col, st.container(key="hf_day_picker"):
+            d = st.radio(
+                "Day", list(range(len(weekly_split))), horizontal=True,
+                format_func=lambda i: _day_label(weekly_split[i], i), key="workout_day_pick",
+                label_visibility="collapsed",
+            )
+        with swap_col:
+            swap_mode = _render_swap_toggle("Swap", "swap_mode_workouts", "d")
+    if swap_mode:
+        st.caption("☑️ Tick exercises you'd like replaced (on any day), then choose "
+                   "**Find replacements** below.")
 
-        st.markdown(f"### {day.get('day', 'Day')}")
-        st.write(day.get("focus", ""))
-
-        exercises = day.get("exercises", [])
-        if exercises:
-            for e, ex in enumerate(exercises):
-                if not isinstance(ex, dict):
-                    st.markdown(f"- {ex}")
-                    continue
-                name = ex.get('name', 'Exercise')
-                st.checkbox(f"**{name}**", key=_swap_key(d, e, ex))
-                st.write(
-                    f"  Sets: {ex.get('sets', '')} | Reps: {ex.get('reps', '')}  \n"
-                    f"  Notes: {ex.get('notes', '')}  \n"
-                    f"  [▶️ Watch a demo]({exercise_demo_url(name)})"
-                )
-
-        st.button("✏️ Edit this day", key=f"edit_day_{d}", on_click=_start_editing, args=(d, day))
+    _render_day_card(plan, d, weekly_split[d], swap_mode)
 
     if progression_notes:
         st.markdown("#### Progression Notes")
         st.write(progression_notes)
 
 
-_EDIT_FIELDS = ("name", "sets", "reps", "notes")
+def _render_day_card(plan: Dict[str, Any], d: int, day: Dict[str, Any], swap_mode: bool) -> None:
+    exercises = day.get("exercises", [])
+    with st.container(border=True):
+        if st.session_state.get("editing_day") == d:
+            _render_day_editor(plan, d)
+            return
+        with st.container(key=f"hf_inline_day_head_{d}"):
+            title_col, edit_col = st.columns([3, 1], vertical_alignment="center")
+            count = len(exercises)
+            subtitle = " · ".join(
+                p for p in [day.get("focus", ""), f"{count} exercise{'' if count == 1 else 's'}"] if p
+            )
+            title_col.markdown(
+                f'<p class="hf-day-title">{html.escape(str(day.get("day", "Day")))}</p>'
+                f'<p class="hf-day-sub">{html.escape(subtitle)}</p>',
+                unsafe_allow_html=True,
+            )
+            edit_col.button("✏️ Edit", key=f"edit_day_{d}", help="Change this day's exercises yourself",
+                            on_click=_start_editing, args=(d, day), use_container_width=True)
 
-# Streamlit stacks columns on narrow screens; inside the editor, keep the short fields
-# (sets/reps) and the row buttons side by side so the editor stays compact on phones.
-_EDITOR_CSS = """
-<style>
-[class*="st-key-edit_inline_"] [data-testid="stHorizontalBlock"] {
-    flex-wrap: nowrap !important;
-    gap: 0.5rem !important;
-}
-[class*="st-key-edit_inline_"] [data-testid="stColumn"] {
-    min-width: 0 !important;
-    width: auto !important;
-    flex: 1 1 0 !important;
-}
-</style>
-"""
+        for e, ex in enumerate(exercises):
+            if not isinstance(ex, dict):
+                st.markdown(f'<div class="hf-item">{html.escape(str(ex))}</div>', unsafe_allow_html=True)
+                continue
+            name = str(ex.get("name", "Exercise"))
+            dose = f"{ex.get('sets', '')} × {ex.get('reps', '')}".strip(" ×")
+            notes = str(ex.get("notes", "") or "")
+            if swap_mode:
+                _render_pick_box(f"d{d}e{e}", ex.get("name", ""), f"**{name}** · {dose}" if dose else f"**{name}**")
+                if notes:
+                    st.caption(notes)
+                continue
+            st.markdown(
+                '<div class="hf-item"><div class="hf-item-top">'
+                f'<span class="hf-item-name">{html.escape(name)}</span>'
+                + (f'<span class="hf-chip">{html.escape(dose)}</span>' if dose else "")
+                + f'<a class="hf-demo" href="{html.escape(exercise_demo_url(name))}" target="_blank" '
+                'rel="noopener">▶️ Demo</a></div>'
+                + (f'<div class="hf-item-notes">{html.escape(notes)}</div>' if notes else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ---------- Editing a day ----------
+
+_EDIT_FIELDS = ("name", "sets", "reps", "notes")
 
 
 def _edit_key(field: str, row_id: int) -> str:
@@ -321,16 +402,17 @@ def _edit_key(field: str, row_id: int) -> str:
 
 
 def _start_editing(day_index: int, day: Dict[str, Any]) -> None:
-    """Opens the editor for one day, filled in with its current exercises."""
+    """Switches one day's card to the editor, filled in with its current exercises."""
     st.session_state.editing_day = day_index
     st.session_state[f"edit_focus_{day_index}"] = str(day.get("focus", ""))
     st.session_state.edit_rows = []
+    st.session_state.edit_new_rows = set()
     for ex in day.get("exercises", []):
         ex = ex if isinstance(ex, dict) else {"name": str(ex)}
-        _add_edit_row({field: ex.get(field, "") for field in _EDIT_FIELDS})
+        _add_edit_row({field: ex.get(field, "") for field in _EDIT_FIELDS}, new=False)
 
 
-def _add_edit_row(values: Dict[str, Any] | None = None) -> None:
+def _add_edit_row(values: Dict[str, Any] | None = None, new: bool = True) -> None:
     # Ids are never reused, so a new row never picks up an old row's typing.
     row_id = st.session_state.get("edit_next_row_id", 0)
     st.session_state.edit_next_row_id = row_id + 1
@@ -338,6 +420,8 @@ def _add_edit_row(values: Dict[str, Any] | None = None) -> None:
         value = (values or {}).get(field, "")
         st.session_state[_edit_key(field, row_id)] = "" if value is None else str(value)
     st.session_state.edit_rows.append(row_id)
+    if new:
+        st.session_state.edit_new_rows.add(row_id)  # Starts opened, ready to fill in
 
 
 def _move_edit_row(position: int, step: int) -> None:
@@ -351,33 +435,43 @@ def _remove_edit_row(position: int) -> None:
     st.session_state.edit_rows.pop(position)
 
 
+def _edit_row_title(row_id: int) -> str:
+    name = st.session_state.get(_edit_key("name", row_id), "").strip() or "New exercise"
+    dose = f"{st.session_state.get(_edit_key('sets', row_id), '').strip()} × " \
+           f"{st.session_state.get(_edit_key('reps', row_id), '').strip()}".strip(" ×")
+    return f"{name} · {dose}" if dose else name
+
+
 def _stop_editing() -> None:
     st.session_state.editing_day = None
 
 
-def _render_day_editor(plan: Dict[str, Any], day_index: int, day: Dict[str, Any]) -> None:
+def _render_day_editor(plan: Dict[str, Any], day_index: int) -> None:
     """
     Lets the user change one day's focus and exercises directly, with no AI involved.
-    Each exercise is a small card of plain fields so it's easy to edit on a phone too.
+    Each exercise opens to plain fields, so it's easy to edit on a phone too.
+
+    (This replaces the day's card rather than opening in st.dialog: in Streamlit 1.40,
+    tapping Save in a dialog while a text box still has focus breaks the page.)
     """
+    day = plan["workout_plan"]["weekly_split"][day_index]
     if "edit_rows" not in st.session_state:
         _start_editing(day_index, day)  # e.g. the editor was open before a page reload
-    st.markdown(_EDITOR_CSS, unsafe_allow_html=True)
-    st.markdown(f"### ✏️ Editing {day.get('day', 'Day')}")
+    st.markdown(f'<p class="hf-day-title">✏️ Editing {html.escape(str(day.get("day", "Day")))}</p>',
+                unsafe_allow_html=True)
     st.text_input("Focus", key=f"edit_focus_{day_index}")
 
     rows = st.session_state.edit_rows
     for position, row_id in enumerate(rows):
-        with st.container(border=True):
+        with st.expander(_edit_row_title(row_id), expanded=row_id in st.session_state.edit_new_rows):
             # Labels must stay the same as rows move, or Streamlit resets the field.
-            st.text_input("Exercise", key=_edit_key("name", row_id),
-                          placeholder="e.g. Romanian Deadlift")
-            with st.container(key=f"edit_inline_fields_{row_id}"):
+            st.text_input("Exercise", key=_edit_key("name", row_id), placeholder="e.g. Romanian Deadlift")
+            with st.container(key=f"hf_inline_edit_fields_{row_id}"):
                 sets_col, reps_col = st.columns(2)
                 sets_col.text_input("Sets", key=_edit_key("sets", row_id), placeholder="e.g. 3")
                 reps_col.text_input("Reps", key=_edit_key("reps", row_id), placeholder="e.g. 8-12 or 30s")
             st.text_input("Notes", key=_edit_key("notes", row_id), placeholder="Optional")
-            with st.container(key=f"edit_inline_buttons_{row_id}"):
+            with st.container(key=f"hf_inline_edit_buttons_{row_id}"):
                 up_col, down_col, remove_col = st.columns(3)
                 up_col.button("⬆️", key=f"edit_up_{row_id}", help="Move up", disabled=position == 0,
                               on_click=_move_edit_row, args=(position, -1), use_container_width=True)
@@ -390,10 +484,13 @@ def _render_day_editor(plan: Dict[str, Any], day_index: int, day: Dict[str, Any]
     st.button("➕ Add an exercise", key=f"edit_add_{day_index}", on_click=_add_edit_row,
               use_container_width=True)
 
-    save_col, cancel_col = st.columns(2)
-    cancel_col.button("Cancel", key=f"edit_cancel_{day_index}", on_click=_stop_editing,
-                      use_container_width=True)
-    if save_col.button("💾 Save Changes", type="primary", key=f"edit_save_{day_index}", use_container_width=True):
+    with st.container(key=f"hf_inline_edit_actions_{day_index}"):
+        cancel_col, save_col = st.columns(2)
+        cancel_col.button("Cancel", key=f"edit_cancel_{day_index}", on_click=_stop_editing,
+                          use_container_width=True)
+        save = save_col.button("💾 Save", type="primary", key=f"edit_save_{day_index}",
+                               use_container_width=True)
+    if save:
         exercises = _exercises_from_rows([
             {field: st.session_state.get(_edit_key(field, row_id), "") for field in _EDIT_FIELDS}
             for row_id in rows
@@ -410,6 +507,7 @@ def _render_day_editor(plan: Dict[str, Any], day_index: int, day: Dict[str, Any]
             st.session_state.plan = new_plan
             st.session_state.unchecked_plan = new_plan  # Shows the safety-check prompt
             st.session_state.flash_message = f"✏️ Saved your changes to {day.get('day', 'this day')}."
+            _drop_picks("d")  # Exercise positions may have changed
         st.rerun()
 
 
@@ -451,6 +549,8 @@ def _render_safety_check_prompt(plan: Dict[str, Any]) -> None:
             except Exception as e:
                 show_error_alert("safety-check your plan", e)
 
+
+# ---------- Replacement choices ----------
 
 def describe_swap_item(plan: Dict[str, Any], item_id: str) -> str:
     """What an exercise ("d0e1") or meal ("m1") id currently is, e.g. "Goblet Squat"."""
@@ -499,13 +599,18 @@ def render_swap_choices(
             if pick < len(item_options):
                 choices[item_id] = item_options[pick]
 
-        apply_col, cancel_col = st.columns(2)
-        if apply_col.button("✅ Apply My Choices", type="primary", key="swap_apply", use_container_width=True):
+        with st.container(key="hf_inline_swap_choice_actions"):
+            cancel_col, apply_col = st.columns(2)
+            cancel = cancel_col.button("Cancel", key="swap_cancel", use_container_width=True)
+            apply = apply_col.button("✅ Apply", type="primary", key="swap_apply", use_container_width=True)
+        if apply:
             return "apply", choices
-        if cancel_col.button("Cancel", key="swap_cancel", use_container_width=True):
+        if cancel:
             return "cancel", {}
     return None, {}
 
+
+# ---------- Nutrition ----------
 
 def _render_nutrition_tab(nutrition_plan: Dict[str, Any]) -> None:
     philosophy = nutrition_plan.get("philosophy", "")
@@ -517,23 +622,40 @@ def _render_nutrition_tab(nutrition_plan: Dict[str, Any]) -> None:
         st.write(philosophy)
 
     if daily_structure:
-        st.markdown("### Daily Meal Structure")
-        st.caption(
-            "☑️ Tick any meals you'd like to replace, then click "
-            "**Find Replacements** below the plan to choose from suggestions."
-        )
-        for m, meal in enumerate(daily_structure):
-            if not isinstance(meal, dict):
-                st.markdown(f"- {meal}")
-                continue
-            st.checkbox(f"**{meal.get('meal', 'Meal')}**", key=_meal_swap_key(m, meal))
-            st.write(f"- Example: {meal.get('example', '')}")
-            st.write(f"- Notes: {meal.get('notes', '')}")
+        with st.container(key="hf_inline_meals_head"):
+            title_col, swap_col = st.columns([2, 1], vertical_alignment="center")
+            title_col.markdown("### Daily Meals")
+            with swap_col:
+                swap_mode = _render_swap_toggle("Swap", "swap_mode_meals", "m")
+        if swap_mode:
+            st.caption("☑️ Tick meals you'd like replaced, then choose **Find replacements** below.")
+        with st.container(border=True):
+            items = []
+            for m, meal in enumerate(daily_structure):
+                if not isinstance(meal, dict):
+                    items.append(f'<div class="hf-item">{html.escape(str(meal))}</div>')
+                    continue
+                slot = str(meal.get("meal", "Meal"))
+                example = str(meal.get("example", ""))
+                notes = str(meal.get("notes", "") or "")
+                if swap_mode:
+                    _render_pick_box(f"m{m}", meal.get("example", ""), f"**{slot}** · {example}")
+                    if notes:
+                        st.caption(notes)
+                    continue
+                items.append(
+                    f'<div class="hf-item"><div class="hf-item-label">{html.escape(slot)}</div>'
+                    f'<div class="hf-item-name">{html.escape(example)}</div>'
+                    + (f'<div class="hf-item-notes">{html.escape(notes)}</div>' if notes else "")
+                    + "</div>"
+                )
+            if items:
+                st.markdown(f'<div class="hf-list">{"".join(items)}</div>', unsafe_allow_html=True)
 
     if grocery_list:
         st.markdown("### Grocery List")
-        for item in grocery_list:
-            st.markdown(f"- {item}")
+        st.markdown(f'<div class="hf-chips">{_chips([str(i) for i in grocery_list])}</div>',
+                    unsafe_allow_html=True)
 
 
 def _render_habits_tab(habits: Dict[str, Any]) -> None:

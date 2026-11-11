@@ -18,6 +18,7 @@ from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, load_plan_file, PlanFileError
 from services.pdf_export import build_plan_pdf
 from ui.scroll import scroll_to
+from ui.styles import inject_styles
 from ui.alerts import show_error_alert
 from ui.browser_storage import read_item, write_item, remove_item
 from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids, clear_swap_selection, render_swap_choices
@@ -178,7 +179,7 @@ def render_plan_actions() -> None:
     """
     Download or save the current plan, or ask for a new take on it.
     """
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         try:
@@ -224,25 +225,6 @@ def render_plan_actions() -> None:
             use_container_width=True,
         )
 
-    exercise_ids = selected_swap_ids(st.session_state.plan)
-    meal_ids = selected_meal_swap_ids(st.session_state.plan)
-    picked = _count_label(len(exercise_ids), "exercise") + _count_label(len(meal_ids), "meal")
-    with col4:
-        find_options = st.button(
-            "🔄 Find Replacements" + (f" ({', '.join(picked)})" if picked else ""),
-            help="Get a few options for each exercise and meal you ticked, then choose the ones you want."
-            if picked else "Tick exercises (Workouts tab) or meals (Nutrition tab) to choose what to replace.",
-            disabled=not picked,
-            use_container_width=True,
-        )
-    preferences = ""
-    if picked:
-        preferences = st.text_input(
-            "Optional: what should the replacements be like?",
-            placeholder="e.g. dumbbells only, no jumping, more unilateral work, quick to prep",
-            key="swap_preferences",
-        )
-
     if regenerate:
         with st.spinner("Generating a different version of your plan..."):
             try:
@@ -253,6 +235,35 @@ def render_plan_actions() -> None:
                 st.rerun()
             except Exception as e:
                 show_error_alert("generate a different version of your plan", e)
+
+
+def render_swap_section() -> None:
+    """
+    Once exercises or meals are ticked in swap mode, asks the AI coach for replacement
+    options and then shows the choices.
+    """
+    pending = st.session_state.get("swap_options")
+    if pending and pending["plan"] is st.session_state.plan:
+        render_pending_swap_choices()
+        return
+
+    exercise_ids = selected_swap_ids(st.session_state.plan)
+    meal_ids = selected_meal_swap_ids(st.session_state.plan)
+    picked = _count_label(len(exercise_ids), "exercise") + _count_label(len(meal_ids), "meal")
+    if not picked:
+        return
+
+    with st.container(border=True):
+        st.markdown(f"#### 🔄 Replace {' and '.join(picked)}")
+        preferences = st.text_input(
+            "Optional: what should the replacements be like?",
+            placeholder="e.g. dumbbells only, no jumping, more unilateral work, quick to prep",
+            key="swap_preferences",
+        )
+        with st.container(key="hf_inline_swap_find_actions"):
+            clear_col, find_col = st.columns([1, 1.6])
+            clear_col.button("Clear ticks", on_click=clear_swap_selection, use_container_width=True)
+            find_options = find_col.button("Find replacements", type="primary", use_container_width=True)
 
     if find_options:
         with st.spinner(f"Finding options for {' and '.join(picked)}..."):
@@ -270,8 +281,6 @@ def render_plan_actions() -> None:
                 st.rerun()
             except Exception as e:
                 show_error_alert("find replacement options", e)
-
-    render_pending_swap_choices()
 
 
 def render_pending_swap_choices() -> None:
@@ -308,6 +317,7 @@ def render_pending_swap_choices() -> None:
 
 
 def main() -> None:
+    inject_styles()
     render_header(APP_NAME, APP_TAGLINE)
     init_session_state()
 
@@ -372,6 +382,7 @@ def main() -> None:
             )
 
         render_plan(st.session_state.plan)
+        render_swap_section()
         render_plan_actions()
 
         # Vision-based nutrition logging
