@@ -1,6 +1,5 @@
 import copy
 from typing import Dict, Any, List, Tuple
-import pandas as pd
 import streamlit as st
 
 from services.exercise_links import exercise_demo_url
@@ -198,7 +197,7 @@ def render_plan(plan: Dict[str, Any]) -> None:
     st.write(summary)
 
     tab1, tab2, tab3, tab4 = st.tabs(
-        ["Workout Plan", "Nutrition Plan", "Habits & Lifestyle", "Disclaimers"]
+        ["Workouts", "Nutrition", "Habits", "Disclaimers"]
     )
 
     with tab1:
@@ -228,7 +227,7 @@ def clear_swap_selection() -> None:
 
 def selected_swap_ids(plan: Dict[str, Any]) -> List[str]:
     """
-    Exercises ticked for swapping in the Workout Plan tab, as "d<day>e<exercise>" ids.
+    Exercises ticked for swapping in the Workouts tab, as "d<day>e<exercise>" ids.
     """
     selected = []
     for d, day in enumerate(plan.get("workout_plan", {}).get("weekly_split", [])):
@@ -291,84 +290,139 @@ def _render_workout_tab(plan: Dict[str, Any], workout_plan: Dict[str, Any]) -> N
                     f"  [▶️ Watch a demo]({exercise_demo_url(name)})"
                 )
 
-        if st.button("✏️ Edit this day", key=f"edit_day_{d}"):
-            st.session_state.editing_day = d
-            st.rerun()
+        st.button("✏️ Edit this day", key=f"edit_day_{d}", on_click=_start_editing, args=(d, day))
 
     if progression_notes:
         st.markdown("#### Progression Notes")
         st.write(progression_notes)
 
 
-_EDITOR_COLUMNS = ["Exercise", "Sets", "Reps", "Notes"]
+_EDIT_FIELDS = ("name", "sets", "reps", "notes")
+
+# Streamlit stacks columns on narrow screens; inside the editor, keep the short fields
+# (sets/reps) and the row buttons side by side so the editor stays compact on phones.
+_EDITOR_CSS = """
+<style>
+[class*="st-key-edit_inline_"] [data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    gap: 0.5rem !important;
+}
+[class*="st-key-edit_inline_"] [data-testid="stColumn"] {
+    min-width: 0 !important;
+    width: auto !important;
+    flex: 1 1 0 !important;
+}
+</style>
+"""
+
+
+def _edit_key(field: str, row_id: int) -> str:
+    return f"edit_{field}_{row_id}"
+
+
+def _start_editing(day_index: int, day: Dict[str, Any]) -> None:
+    """Opens the editor for one day, filled in with its current exercises."""
+    st.session_state.editing_day = day_index
+    st.session_state[f"edit_focus_{day_index}"] = str(day.get("focus", ""))
+    st.session_state.edit_rows = []
+    for ex in day.get("exercises", []):
+        ex = ex if isinstance(ex, dict) else {"name": str(ex)}
+        _add_edit_row({field: ex.get(field, "") for field in _EDIT_FIELDS})
+
+
+def _add_edit_row(values: Dict[str, Any] | None = None) -> None:
+    # Ids are never reused, so a new row never picks up an old row's typing.
+    row_id = st.session_state.get("edit_next_row_id", 0)
+    st.session_state.edit_next_row_id = row_id + 1
+    for field in _EDIT_FIELDS:
+        value = (values or {}).get(field, "")
+        st.session_state[_edit_key(field, row_id)] = "" if value is None else str(value)
+    st.session_state.edit_rows.append(row_id)
+
+
+def _move_edit_row(position: int, step: int) -> None:
+    rows = st.session_state.edit_rows
+    target = position + step
+    if 0 <= target < len(rows):
+        rows[position], rows[target] = rows[target], rows[position]
+
+
+def _remove_edit_row(position: int) -> None:
+    st.session_state.edit_rows.pop(position)
+
+
+def _stop_editing() -> None:
+    st.session_state.editing_day = None
 
 
 def _render_day_editor(plan: Dict[str, Any], day_index: int, day: Dict[str, Any]) -> None:
     """
     Lets the user change one day's focus and exercises directly, with no AI involved.
+    Each exercise is a small card of plain fields so it's easy to edit on a phone too.
     """
+    if "edit_rows" not in st.session_state:
+        _start_editing(day_index, day)  # e.g. the editor was open before a page reload
+    st.markdown(_EDITOR_CSS, unsafe_allow_html=True)
     st.markdown(f"### ✏️ Editing {day.get('day', 'Day')}")
-    focus = st.text_input("Focus", value=day.get("focus", ""), key=f"edit_focus_{day_index}")
+    st.text_input("Focus", key=f"edit_focus_{day_index}")
 
-    rows = [
-        {"Exercise": ex.get("name", ""), "Sets": str(ex.get("sets", "")), "Reps": str(ex.get("reps", "")),
-         "Notes": ex.get("notes", "")}
-        if isinstance(ex, dict) else {"Exercise": str(ex), "Sets": "", "Reps": "", "Notes": ""}
-        for ex in day.get("exercises", [])
-    ]
-    edited = st.data_editor(
-        pd.DataFrame(rows, columns=_EDITOR_COLUMNS),
-        key=f"edit_table_{day_index}",
-        num_rows="dynamic",
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "Exercise": st.column_config.TextColumn(required=True, width="medium"),
-            "Sets": st.column_config.TextColumn(width="small", help="e.g. 3"),
-            "Reps": st.column_config.TextColumn(width="small", help="e.g. 8-12 or 30s"),
-            "Notes": st.column_config.TextColumn(width="large"),
-        },
-    )
-    st.caption("Tap a cell to change it. Add an exercise in the empty row at the bottom; "
-               "to remove one, select its row and press the 🗑️ icon.")
+    rows = st.session_state.edit_rows
+    for position, row_id in enumerate(rows):
+        with st.container(border=True):
+            # Labels must stay the same as rows move, or Streamlit resets the field.
+            st.text_input("Exercise", key=_edit_key("name", row_id),
+                          placeholder="e.g. Romanian Deadlift")
+            with st.container(key=f"edit_inline_fields_{row_id}"):
+                sets_col, reps_col = st.columns(2)
+                sets_col.text_input("Sets", key=_edit_key("sets", row_id), placeholder="e.g. 3")
+                reps_col.text_input("Reps", key=_edit_key("reps", row_id), placeholder="e.g. 8-12 or 30s")
+            st.text_input("Notes", key=_edit_key("notes", row_id), placeholder="Optional")
+            with st.container(key=f"edit_inline_buttons_{row_id}"):
+                up_col, down_col, remove_col = st.columns(3)
+                up_col.button("⬆️", key=f"edit_up_{row_id}", help="Move up", disabled=position == 0,
+                              on_click=_move_edit_row, args=(position, -1), use_container_width=True)
+                down_col.button("⬇️", key=f"edit_down_{row_id}", help="Move down",
+                                disabled=position == len(rows) - 1,
+                                on_click=_move_edit_row, args=(position, 1), use_container_width=True)
+                remove_col.button("🗑️", key=f"edit_remove_{row_id}", help="Remove this exercise",
+                                  on_click=_remove_edit_row, args=(position,), use_container_width=True)
+
+    st.button("➕ Add an exercise", key=f"edit_add_{day_index}", on_click=_add_edit_row,
+              use_container_width=True)
 
     save_col, cancel_col = st.columns(2)
+    cancel_col.button("Cancel", key=f"edit_cancel_{day_index}", on_click=_stop_editing,
+                      use_container_width=True)
     if save_col.button("💾 Save Changes", type="primary", key=f"edit_save_{day_index}", use_container_width=True):
-        exercises = _exercises_from_editor(edited)
+        exercises = _exercises_from_rows([
+            {field: st.session_state.get(_edit_key(field, row_id), "") for field in _EDIT_FIELDS}
+            for row_id in rows
+        ])
         if not exercises:
             st.error("Add at least one exercise before saving.", icon="🚨")
             return
         new_plan = copy.deepcopy(plan)
         new_day = new_plan["workout_plan"]["weekly_split"][day_index]
-        new_day["focus"] = focus.strip()
+        new_day["focus"] = st.session_state.get(f"edit_focus_{day_index}", "").strip()
         new_day["exercises"] = exercises
-        st.session_state.editing_day = None
+        _stop_editing()
         if new_plan != plan:
             st.session_state.plan = new_plan
             st.session_state.unchecked_plan = new_plan  # Shows the safety-check prompt
             st.session_state.flash_message = f"✏️ Saved your changes to {day.get('day', 'this day')}."
         st.rerun()
-    if cancel_col.button("Cancel", key=f"edit_cancel_{day_index}", use_container_width=True):
-        st.session_state.editing_day = None
-        st.rerun()
 
 
-def _exercises_from_editor(edited: pd.DataFrame) -> List[Dict[str, Any]]:
-    def cell(value: Any) -> str:
-        return "" if value is None or pd.isna(value) else str(value).strip()
-
+def _exercises_from_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Turns the editor's fields into plan exercises, skipping rows with no name."""
     exercises = []
-    for row in edited.to_dict("records"):
-        name = cell(row.get("Exercise"))
-        if not name:
+    for row in rows:
+        values = {field: str(row.get(field) or "").strip() for field in _EDIT_FIELDS}
+        if not values["name"]:
             continue  # Blank rows are ignored
-        sets = cell(row.get("Sets"))
-        exercises.append({
-            "name": name,
-            "sets": int(sets) if sets.isdigit() else sets,
-            "reps": cell(row.get("Reps")),
-            "notes": cell(row.get("Notes")),
-        })
+        if values["sets"].isdigit():
+            values["sets"] = int(values["sets"])
+        exercises.append(values)
     return exercises
 
 

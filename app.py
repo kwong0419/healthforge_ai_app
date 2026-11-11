@@ -17,6 +17,7 @@ from config import APP_NAME, APP_TAGLINE
 from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, load_plan_file, PlanFileError
 from services.pdf_export import build_plan_pdf
+from ui.scroll import scroll_to
 from ui.alerts import show_error_alert
 from ui.browser_storage import read_item, write_item, remove_item
 from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids, clear_swap_selection, render_swap_choices
@@ -230,7 +231,7 @@ def render_plan_actions() -> None:
         find_options = st.button(
             "🔄 Find Replacements" + (f" ({', '.join(picked)})" if picked else ""),
             help="Get a few options for each exercise and meal you ticked, then choose the ones you want."
-            if picked else "Tick exercises (Workout Plan tab) or meals (Nutrition tab) to choose what to replace.",
+            if picked else "Tick exercises (Workouts tab) or meals (Nutrition tab) to choose what to replace.",
             disabled=not picked,
             use_container_width=True,
         )
@@ -350,7 +351,10 @@ def main() -> None:
 
     if st.session_state.plan:
         if st.session_state.flash_message:
-            st.success(st.session_state.flash_message)
+            with st.container(key="flash_message"):
+                st.success(st.session_state.flash_message)
+            # The action was usually lower down the page; bring its result into view.
+            scroll_to("flash_message")
             st.session_state.flash_message = None
 
         if st.session_state.macro_logged_meal:
