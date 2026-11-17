@@ -117,8 +117,10 @@ def set_profile_form_values(profile: Dict[str, Any]) -> None:
     st.session_state.profile_form_version = st.session_state.get("profile_form_version", 0) + 1
 
 
-def render_user_profile_form() -> Dict[str, Any]:
+def render_user_profile_form(submit_label: str = "Generate Plan", caption: str = "") -> Dict[str, Any]:
     st.subheader("Your Profile")
+    if caption:
+        st.caption(caption)
     v = _form_values()
 
     def select(label: str, field: str) -> str:
@@ -165,7 +167,7 @@ def render_user_profile_form() -> Dict[str, Any]:
             key=_form_key("notes"),
         )
 
-        submitted = st.form_submit_button("Generate Plan")
+        submitted = st.form_submit_button(submit_label, type="primary")
 
         profile = {
             "name": name,
@@ -760,7 +762,6 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
     Renders an image upload interface for extracting nutrition data.
     Returns extracted macro data or None if no image processed.
     """
-    st.markdown("---")
     st.subheader("📸 Log Meal from Photo (Beta)")
     st.write(
         "Upload a photo of a food label or your meal. Our AI will extract macros "
@@ -805,7 +806,7 @@ def render_nutrition_from_image() -> Dict[str, Any] | None:
                     if "error" in result:
                         st.warning(
                             f"**Couldn't analyze this photo.** {result['error']}\n\n"
-                            "You can also describe the meal in Coach Feedback below.",
+                            "You can also describe the meal to your coach on the Coach page.",
                             icon="⚠️",
                         )
                         return None

@@ -50,6 +50,26 @@ a {{ color: {ACCENT} !important; }}
     color: {ACCENT} !important; fill: {ACCENT} !important;
 }}
 
+/* Brand line and the bar of page links at the top of every page */
+.hf-brand {{ color: {ACCENT}; font-weight: 700; font-size: 1.15rem; margin: -0.5rem 0 0.25rem; }}
+.st-key-hf_inline_nav {{ padding: 0.2rem 0 0.4rem; }}
+.st-key-hf_inline_nav [data-testid="stHorizontalBlock"] {{ gap: 0.4rem !important; }}
+.st-key-hf_inline_nav [data-testid="stPageLink-NavLink"] {{
+    justify-content: center; border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 999px;
+    padding: 0.3rem 0.4rem; margin: 0; white-space: nowrap;
+}}
+.st-key-hf_inline_nav [data-testid="stPageLink-NavLink"]:hover {{ border-color: {ACCENT}; background: {ACCENT_TINT}; }}
+.st-key-hf_inline_nav [data-testid="stPageLink-NavLink"] p {{ font-weight: 600; }}
+.st-key-hf_inline_nav [class*="_active"] [data-testid="stPageLink-NavLink"] {{
+    background: {ACCENT}; border-color: {ACCENT};
+}}
+.st-key-hf_inline_nav [class*="_active"] [data-testid="stPageLink-NavLink"] p,
+.st-key-hf_inline_nav [class*="_active"] [data-testid="stPageLink-NavLink"] span {{ color: #ffffff !important; }}
+@media (max-width: 420px) {{
+    .st-key-hf_inline_nav [data-testid="stPageLink-NavLink"] {{ padding: 0.3rem 0.15rem; }}
+    .st-key-hf_inline_nav [data-testid="stPageLink-NavLink"] p {{ font-size: 0.85rem; }}
+}}
+
 /* The day picker: a row of radio buttons drawn as pills */
 .st-key-hf_day_picker [role="radiogroup"] {{ gap: 6px; flex-wrap: wrap; }}
 .st-key-hf_day_picker label[data-baseweb="radio"] {{
@@ -89,10 +109,12 @@ a {{ color: {ACCENT} !important; }}
 [class*="st-key-hf_coach_reply"] [data-testid="stElementContainer"],
 [class*="st-key-hf_coach_reply"] [style*="width"] {{ width: 100% !important; }}
 .st-key-hf_coach_reply_fresh {{
+    /* Grows from its top edge, so scrolling to it lands in the right place */
+    transform-origin: top center;
     animation: hf-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both, hf-glow 1.6s ease-out 0.55s 2;
 }}
 @keyframes hf-pop {{
-    0% {{ opacity: 0; transform: translateY(16px) scale(0.94); }}
+    0% {{ opacity: 0; transform: scale(0.92); }}
     100% {{ opacity: 1; transform: none; }}
 }}
 @keyframes hf-glow {{
@@ -102,6 +124,8 @@ a {{ color: {ACCENT} !important; }}
 @media (prefers-reduced-motion: reduce) {{
     .st-key-hf_coach_reply_fresh {{ animation: none; }}
 }}
+/* Toasts sit at the top, over what was just scrolled into view; move them to the bottom */
+[data-testid="stToastContainer"] {{ top: auto !important; bottom: 1rem !important; }}
 .hf-reply-head {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
 .hf-reply-icon {{
     display: inline-flex; align-items: center; justify-content: center; width: 2.2rem; height: 2.2rem;
