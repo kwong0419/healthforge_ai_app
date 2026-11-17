@@ -79,6 +79,50 @@ a {{ color: {ACCENT} !important; }}
                  letter-spacing: 0.04em; }}
 .hf-demo {{ margin-left: auto; font-size: 0.85rem; white-space: nowrap; text-decoration: none; }}
 
+/* The coach's reply to feedback: a glowing card that pops in when it's new */
+[class*="st-key-hf_coach_reply"] {{
+    border: 2px solid {ACCENT}; border-radius: 14px; padding: 1rem 1.1rem; box-sizing: border-box;
+    background: linear-gradient(160deg, rgba(29, 158, 117, 0.20) 0%, rgba(29, 158, 117, 0.05) 55%);
+    box-shadow: 0 6px 24px rgba(29, 158, 117, 0.25);
+}}
+/* Streamlit sizes elements to the column in pixels; fit them inside the card's padding */
+[class*="st-key-hf_coach_reply"] [data-testid="stElementContainer"],
+[class*="st-key-hf_coach_reply"] [style*="width"] {{ width: 100% !important; }}
+.st-key-hf_coach_reply_fresh {{
+    animation: hf-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both, hf-glow 1.6s ease-out 0.55s 2;
+}}
+@keyframes hf-pop {{
+    0% {{ opacity: 0; transform: translateY(16px) scale(0.94); }}
+    100% {{ opacity: 1; transform: none; }}
+}}
+@keyframes hf-glow {{
+    0% {{ box-shadow: 0 0 0 0 rgba(29, 158, 117, 0.55); }}
+    100% {{ box-shadow: 0 0 0 14px rgba(29, 158, 117, 0), 0 6px 24px rgba(29, 158, 117, 0.25); }}
+}}
+@media (prefers-reduced-motion: reduce) {{
+    .st-key-hf_coach_reply_fresh {{ animation: none; }}
+}}
+.hf-reply-head {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+.hf-reply-icon {{
+    display: inline-flex; align-items: center; justify-content: center; width: 2.2rem; height: 2.2rem;
+    border-radius: 50%; background: {ACCENT}; font-size: 1.1rem;
+}}
+.hf-reply-title {{ color: {ACCENT}; font-size: 1.2rem; font-weight: 700; line-height: 1.25; }}
+.hf-reply-count {{
+    background: {ACCENT}; color: #ffffff; border-radius: 999px; padding: 1px 10px;
+    font-size: 0.8rem; font-weight: 600; white-space: nowrap;
+}}
+.hf-asked {{ opacity: 0.7; font-size: 0.88rem; font-style: italic; margin-bottom: 0.5rem; }}
+.hf-coach-note {{ border-left: 4px solid {ACCENT}; background: rgba(128, 128, 128, 0.10); border-radius: 8px;
+                 padding: 0.7rem 0.9rem; margin-bottom: 0.75rem; font-size: 1.02rem; }}
+.hf-coach-note p {{ margin: 0 0 0.4rem; }}
+.hf-coach-note p:last-child {{ margin-bottom: 0; }}
+.hf-change-head {{ font-weight: 700; margin-bottom: 0.25rem; }}
+.hf-change-title {{ color: {ACCENT}; font-size: 0.85rem; font-weight: 600; margin-top: 0.5rem; }}
+.hf-change-list {{ margin: 0.1rem 0 0 1.1rem; padding: 0; }}
+.hf-change-list li {{ margin: 0.1rem 0; font-size: 0.92rem; }}
+.hf-change-list li::marker {{ color: {ACCENT}; }}
+
 /* Streamlit stacks columns on phones. Inside containers keyed "hf_inline_...", keep them
    side by side (e.g. Sets and Reps, or a title and its Edit button). */
 [class*="st-key-hf_inline_"] [data-testid="stHorizontalBlock"] {{

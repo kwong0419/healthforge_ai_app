@@ -215,6 +215,69 @@ def render_plan(plan: Dict[str, Any]) -> None:
         _render_disclaimers_tab(disclaimers)
 
 
+def _dismiss_coach_reply() -> None:
+    st.session_state.coach_reply = None
+
+
+COACH_REPLY_KEY = "hf_coach_reply"
+
+
+def render_coach_reply(reply: Dict[str, Any], fresh: bool = False) -> str:
+    """
+    Shows the coach's answer to the user's feedback: what they asked, the coach's note,
+    and the list of changes (worked out by comparing the plans, see services/plan_diff).
+    When `fresh` (just updated), it pops in with a glow and a toast. Returns the key of
+    its container, for scrolling to it.
+    """
+    changes = reply.get("changes") or []
+    change_count = sum(len(lines) for _, lines in changes)
+    # A different key for a fresh reply makes Streamlit draw it anew, so the pop-in plays.
+    key = f"{COACH_REPLY_KEY}_fresh" if fresh else COACH_REPLY_KEY
+    if fresh:
+        st.toast(
+            f"Your coach made {change_count} change{'' if change_count == 1 else 's'} to your plan"
+            if change_count else "Your coach replied",
+            icon="✨",
+        )
+
+    with st.container(key=key):
+        badge = (
+            f'<span class="hf-reply-count">{change_count} change{"" if change_count == 1 else "s"}</span>'
+            if change_count else '<span class="hf-reply-count">No changes</span>'
+        )
+        st.markdown(
+            f'<div class="hf-reply-head"><span class="hf-reply-icon">💬</span>'
+            f'<span class="hf-reply-title">Your coach updated your plan</span>{badge}</div>'
+            if change_count else
+            f'<div class="hf-reply-head"><span class="hf-reply-icon">💬</span>'
+            f'<span class="hf-reply-title">Your coach replied</span>{badge}</div>',
+            unsafe_allow_html=True,
+        )
+        asked = reply.get("asked", "")
+        if len(asked) > 220:
+            asked = asked[:219].rstrip() + "…"
+        st.markdown(f'<div class="hf-asked">You asked: “{html.escape(asked)}”</div>', unsafe_allow_html=True)
+
+        note = reply.get("note") or "Here's what changed in your plan."
+        paragraphs = "".join(f"<p>{html.escape(p)}</p>" for p in note.split("\n") if p.strip())
+        st.markdown(f'<div class="hf-coach-note">{paragraphs}</div>', unsafe_allow_html=True)
+
+        if changes:
+            parts = ['<div class="hf-change-head">What changed</div>']
+            for title, lines in changes:
+                items = "".join(f"<li>{html.escape(line)}</li>" for line in lines)
+                parts.append(f'<div class="hf-change-title">{html.escape(title)}</div><ul class="hf-change-list">{items}</ul>')
+            st.markdown("".join(parts), unsafe_allow_html=True)
+        else:
+            st.info(
+                "Nothing in your workouts, meals or habits changed. Try naming the exercise "
+                "or meal you want changed, e.g. \"replace overhead press, it hurts my shoulder\".",
+                icon="ℹ️",
+            )
+        st.button("Got it", key="coach_reply_dismiss", on_click=_dismiss_coach_reply)
+    return key
+
+
 def _chips(texts: List[str]) -> str:
     return "".join(f'<span class="hf-chip">{html.escape(t)}</span>' for t in texts if t)
 

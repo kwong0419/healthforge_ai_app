@@ -17,11 +17,12 @@ from config import APP_NAME, APP_TAGLINE
 from services.planner import HealthForgePlanner, failed_safety_audit
 from services.plan_storage import serialize_plan, load_plan_file, PlanFileError
 from services.pdf_export import build_plan_pdf
+from services.plan_diff import describe_changes
 from ui.scroll import scroll_to
 from ui.styles import inject_styles
 from ui.alerts import show_error_alert
 from ui.browser_storage import read_item, write_item, remove_item
-from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids, clear_swap_selection, render_swap_choices
+from ui.components import render_header, render_user_profile_form, render_plan, render_nutrition_from_image, render_meal_journal, render_coach_reply, set_profile_form_values, selected_swap_ids, selected_meal_swap_ids, clear_swap_selection, render_swap_choices
 
 
 def init_session_state() -> None:
@@ -32,7 +33,7 @@ def init_session_state() -> None:
         "flash_message": None,
         "meal_log": [],
         "extracted_macros": None,
-        "macro_logged_meal": None,
+        "coach_reply": None,
         "loaded_plan_file_id": None,
         "browser_storage_checked": False,
     }
@@ -131,12 +132,20 @@ def sync_browser_storage() -> None:
     write_item(BROWSER_STORAGE_NAME, serialize_plan(*state), key=f"browser_storage_write_{digest}")
 
 
-def apply_feedback(feedback: str) -> None:
+def plan_key(plan: dict | None) -> str:
+    """A short fingerprint of a plan's content, to tell whether it has changed since."""
+    return hashlib.sha256(json.dumps(plan, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def apply_feedback(feedback: str, asked: str | None = None) -> None:
     """
     Sends feedback to the coach, records the exchange, and swaps in the updated plan.
+    Keeps the coach's reply (its note and the list of what changed) to show the user.
+    `asked` is how the request is shown to the user, if not the feedback text itself.
     """
     planner = HealthForgePlanner()
-    new_plan = planner.update_plan(
+    old_plan = st.session_state.plan
+    new_plan, note = planner.update_plan(
         user_profile=st.session_state.profile,
         current_plan=st.session_state.plan,
         chat_history=st.session_state.chat_history,
@@ -152,6 +161,13 @@ def apply_feedback(feedback: str) -> None:
         st.session_state.chat_history = st.session_state.chat_history[-10:]
 
     st.session_state.plan = new_plan
+    st.session_state.coach_reply = {
+        "asked": asked or feedback,
+        "note": note,
+        "changes": describe_changes(old_plan, new_plan),
+        "plan_key": plan_key(new_plan),
+        "scroll": True,
+    }
 
 
 @st.cache_data(max_entries=20, show_spinner=False)
@@ -367,10 +383,14 @@ def main() -> None:
             scroll_to("flash_message")
             st.session_state.flash_message = None
 
-        if st.session_state.macro_logged_meal:
-            food = st.session_state.macro_logged_meal
-            st.success(f"🍽️ Meal logged: **{food}** — your remaining meals have been adjusted.")
-            st.session_state.macro_logged_meal = None
+        reply = st.session_state.coach_reply
+        # Shown until dismissed, or until the plan changes some other way (edit, swap, new plan).
+        if reply and reply.get("plan_key") == plan_key(st.session_state.plan):
+            fresh = reply.get("scroll", False)
+            key = render_coach_reply(reply, fresh=fresh)
+            if fresh:
+                scroll_to(key)
+                reply["scroll"] = False
 
         if failed_safety_audit(st.session_state.plan):
             st.warning(
@@ -395,8 +415,6 @@ def main() -> None:
             if st.button("Update Plan with These Macros", key="update_with_macros_btn"):
                 with st.spinner("Updating your plan based on extracted nutrition..."):
                     try:
-                        planner = HealthForgePlanner()
-                        
                         # Build feedback message from extracted macros
                         macro_feedback = (
                             f"I just logged a meal with approximately: "
@@ -407,14 +425,9 @@ def main() -> None:
                             f"Please adjust my remaining meals for today accordingly. "
                             f"Food logged: {extracted_macros['food_description']}"
                         )
-                        
-                        new_plan = planner.update_plan(
-                            user_profile=st.session_state.profile,
-                            current_plan=st.session_state.plan,
-                            chat_history=st.session_state.chat_history,
-                            new_feedback=macro_feedback
-                        )
-                        
+                        food = extracted_macros.get("food_description", "your meal")
+                        apply_feedback(macro_feedback, asked=f"Adjust my remaining meals for today — I just ate {food}.")
+
                         # Append to meal journal
                         st.session_state.meal_log.append({
                             "timestamp": datetime.now().strftime("%H:%M"),
@@ -426,17 +439,6 @@ def main() -> None:
                             "confidence": extracted_macros.get("confidence", "low"),
                             "notes":     extracted_macros.get("notes", ""),
                         })
-
-                        # Update history
-                        st.session_state.chat_history.append({"role": "assistant", "content": json.dumps(st.session_state.plan)})
-                        st.session_state.chat_history.append({"role": "user", "content": macro_feedback})
-
-                        # Keep history short
-                        if len(st.session_state.chat_history) > 10:
-                            st.session_state.chat_history = st.session_state.chat_history[-10:]
-
-                        st.session_state.plan = new_plan
-                        st.session_state.macro_logged_meal = extracted_macros.get("food_description", "your meal")
                         st.session_state.extracted_macros = None  # clear after use
                         st.rerun()
                     except Exception as e:
@@ -455,7 +457,6 @@ def main() -> None:
             with st.spinner("Updating your plan..."):
                 try:
                     apply_feedback(feedback)
-                    st.session_state.flash_message = "✅ Your plan has been successfully updated based on your feedback!"
                     st.rerun()
                 except Exception as e:
                     show_error_alert("update your plan with your feedback", e)

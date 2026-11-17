@@ -20,6 +20,15 @@ AUDIT_MAX_TOKENS = 3000     # ~3,500 prompt (includes plan) + ~1,000 reasoning/v
 SWAP_MAX_TOKENS = 4000      # ~1,500 prompt (exercise names only) + reasoning + 3 options per item
 SWAP_OPTIONS = 3            # Replacement choices offered for each exercise or meal
 
+# Added to each update request so the coach says, in plain words, what it changed.
+# It's sent with the request only, never stored in the chat history.
+COACH_NOTE_INSTRUCTION = (
+    "\n\nAlongside the plan fields, add a top-level \"coach_note\" string: 2-4 short, "
+    "friendly sentences to the user saying what you changed and why, in direct response "
+    "to the request above (name the exercises or meals you changed). If you changed "
+    "nothing, say so and why. Don't repeat the whole plan."
+)
+
 # Writing the plan JSON needs little reasoning; the auditor keeps the default effort.
 PLAN_REASONING_EFFORT = "low"
 
@@ -101,8 +110,8 @@ class HealthForgeLLMClient:
         # Append the current plan so the LLM knows what to modify
         messages.append({"role": "assistant", "content": json.dumps(current_plan)})
         
-        # Append the new feedback
-        messages.append({"role": "user", "content": new_feedback})
+        # Append the new feedback, asking for a note on what changed
+        messages.append({"role": "user", "content": new_feedback + COACH_NOTE_INSTRUCTION})
 
         content = self._complete(
             messages=messages,

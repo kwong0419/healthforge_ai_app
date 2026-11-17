@@ -24,6 +24,12 @@ def _set_audit_warning(plan: Dict[str, Any], reason: str | None) -> Dict[str, An
     return plan
 
 
+def _take_coach_note(plan: Dict[str, Any]) -> str:
+    """Removes the coach's note from an updated plan (it isn't part of the plan) and returns it."""
+    note = plan.pop("coach_note", "") if isinstance(plan, dict) else ""
+    return note.strip() if isinstance(note, str) else ""
+
+
 class HealthForgePlanner:
     """
     High-level orchestrator that uses the LLM client to build plans.
@@ -50,21 +56,24 @@ class HealthForgePlanner:
             
             # Use update_plan to refine the current plan based on the auditor's feedback
             plan = self.llm_client.update_plan(user_profile, plan, [], auto_feedback)
+            _take_coach_note(plan)
             
         # If we exhausted retries, append a safety warning and return the plan as-is
         return _set_audit_warning(plan, reason)
 
-    def update_plan(self, user_profile: Dict[str, Any], current_plan: Dict[str, Any], chat_history: list, new_feedback: str, max_retries: int = 2) -> Dict[str, Any]:
+    def update_plan(self, user_profile: Dict[str, Any], current_plan: Dict[str, Any], chat_history: list, new_feedback: str, max_retries: int = 2) -> Tuple[Dict[str, Any], str]:
         """
         Update an existing plan based on feedback.
         Includes a Safety Audit loop to auto-fix unsafe plan updates up to max_retries.
+        Returns the new plan and the coach's note to the user on what it changed.
         """
         plan = self.llm_client.update_plan(user_profile, current_plan, chat_history, new_feedback)
+        note = _take_coach_note(plan)
 
         for attempt in range(max_retries):
             audit_result = self.llm_client.audit_plan(user_profile, plan)
             if audit_result.get("status") == "PASSED":
-                return _set_audit_warning(plan, reason=None)
+                return _set_audit_warning(plan, reason=None), note
                 
             # The updated plan failed the audit. Attempt to auto-fix it.
             reason = audit_result.get("reason", "Safety audit failed.")
@@ -72,9 +81,12 @@ class HealthForgePlanner:
             
             # We don't append auto-feedback to the visible chat_history, just use it to correct the current iteration
             plan = self.llm_client.update_plan(user_profile, plan, chat_history, auto_feedback)
+            fix_note = _take_coach_note(plan)
+            if fix_note:
+                note = f"{note}\n\nAfter a safety check: {fix_note}".strip()
             
         # If we exhausted retries, append a safety warning
-        return _set_audit_warning(plan, reason)
+        return _set_audit_warning(plan, reason), note
 
     def find_swap_options(
         self,
